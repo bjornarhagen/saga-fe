@@ -18,6 +18,7 @@ LEDGER_TABLES = {
     "account_identifiers", "category_identifiers", "counterparty_identifiers",
     "balance_snapshots", "transactions", "source_transaction_keys",
     "ingest_batches", "ingest_rows", "transaction_edits", "settings",
+    "transaction_relations",
 }
 
 
@@ -114,23 +115,25 @@ def check_exports_clean(container):
     docker("exec", container, "node", "--input-type=module", "-e", verify)
 
 
-def check_exports(base, cookie, container, account_id, transaction_id):
+def check_exports(base, cookie, container, account_id, transaction_id, decisions):
     status, body, headers = request(base, "/api/export?format=json", cookie=cookie)
     assert status == 200 and "application/json" in headers.get("Content-Type", ""), "JSON export failed"
     check_export_headers(headers, "json")
     archive = json.loads(body)
     assert archive.get("format") == "saga-fe-ledger" and archive.get("formatVersion") == 1, "JSON archive is not versioned"
-    assert archive.get("databaseSchemaVersion") == 1 and archive.get("amountUnit") == "ore", "JSON archive schema or amount unit is incorrect"
+    assert archive.get("databaseSchemaVersion") == 2 and archive.get("amountUnit") == "ore", "JSON archive schema or amount unit is incorrect"
     tables = archive.get("tables", {})
     assert set(tables) == LEDGER_TABLES and all(tables.values()), "JSON archive omitted saved ledger tables or rows"
     assert tables["accounts"][0]["id"] == account_id, "account identity was lost in export"
     assert tables["account_identifiers"][0]["external_id"] == "fixture-cash", "source account identifiers were omitted"
     assert sorted(row["amount"] for row in tables["balance_snapshots"]) == [105, 12345], "balance history was omitted"
     assert tables["transactions"][0]["id"] == transaction_id and tables["transactions"][0]["amount"] == -105, "transaction contents were lost"
-    assert len(tables["ingest_batches"]) == 1 and tables["ingest_batches"][0]["row_count"] == 1, "ingestion history was lost"
+    assert len(tables["transactions"]) == 2, "transaction rows were omitted from export"
+    assert len(tables["ingest_batches"]) == 1 and tables["ingest_batches"][0]["row_count"] == 2, "ingestion history was lost"
     assert json.loads(tables["ingest_rows"][0]["raw_json"])["externalId"] == "fixture-payment", "raw ingestion provenance was lost"
     assert json.loads(tables["settings"][0]["value_json"])["horizon"] == 2, "saved settings were omitted"
     assert json.loads(tables["transaction_edits"][0]["value_json"])["excludeForecast"] is True, "transaction edits were omitted"
+    assert tables["transaction_relations"] == [{"transaction_a": decision["transactionId"], "transaction_b": decision["relatedTransactionId"], "status": decision["status"], "created_at": decision["createdAt"], "updated_at": decision["updatedAt"]} for decision in decisions], "saved connection decisions were omitted from export"
     check_exports_clean(container)
     status, body, headers = request(base, "/api/export?format=sqlite", method="HEAD", cookie=cookie)
     assert status == 200 and not body, "HEAD export created a response body"
@@ -153,6 +156,7 @@ writeFileSync(path,Buffer.from(fixture.sqlite,'base64'),{flag:'wx',mode:0o600});
 const db=new DatabaseSync(path,{readOnly:true});
 try {
   if(db.prepare('PRAGMA integrity_check').get().integrity_check!=='ok'||db.prepare('PRAGMA foreign_key_check').all().length)throw new Error('Downloaded recovery integrity failed.');
+  if(db.prepare('PRAGMA user_version').get().user_version!==2)throw new Error('Downloaded recovery schema version differs.');
   const actual=db.prepare("SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all().map(row=>row.name);
   const expected=Object.keys(fixture.archive.tables).sort();
   if(JSON.stringify(actual)!==JSON.stringify(expected))throw new Error('Downloaded recovery schema differs.');
@@ -168,13 +172,36 @@ try {
     subprocess.run(["docker", "exec", "-i", container, "node", "--input-type=module", "-e", verify], input=fixture, check=True, stdout=subprocess.DEVNULL)
 
 
-def private_json(base, path, cookie, expected_status=200):
-    status, body, headers = request(base, path, cookie=cookie)
+def private_json(base, path, cookie, expected_status=200, method="GET", payload=None):
+    status, body, headers = request(base, path, method=method, payload=payload, cookie=cookie)
     assert status == expected_status, "private activity API returned an unexpected status"
     assert headers.get("Cache-Control") == "no-store", "private activity response was cacheable"
     assert headers.get("X-Content-Type-Options") == "nosniff", "private activity response omitted nosniff"
     assert "application/json" in headers.get("Content-Type", ""), "private activity API did not return JSON"
     return json.loads(body)
+
+
+def check_relations(base, cookie, transaction_id, related_id):
+    path = "/api/relations"
+    assert private_json(base, path, cookie) == {"decisions": []}, "fresh fixture unexpectedly contained relationship decisions"
+    before = private_json(base, "/api/transactions", cookie)["transactions"]
+    decision = {"transactionId": transaction_id, "relatedTransactionId": related_id, "status": "confirmed"}
+    assert request(base, path, "PATCH", decision)[0] == 401, "relationship decisions did not require owner login"
+    assert request(base, path, "PATCH", decision, cookie, origin="https://untrusted.example")[0] == 403, "cross-origin relationship mutation was accepted"
+    invalid = ({**decision, "status": "unsupported"}, {**decision, "relatedTransactionId": transaction_id}, {**decision, "relatedTransactionId": "missing-opaque-fixture"}, {**decision, "unexpected": True}, {"transactionId": transaction_id, "status": "confirmed"})
+    for payload in invalid:
+        assert set(private_json(base, path, cookie, 400, "PATCH", payload)) == {"error"}, "invalid relationship decision was accepted"
+    assert private_json(base, path, cookie) == {"decisions": []}, "invalid decisions changed saved relationships"
+    confirmed = private_json(base, path, cookie, method="PATCH", payload=decision)["decisions"]
+    assert len(confirmed) == 1 and [confirmed[0]["transactionId"], confirmed[0]["relatedTransactionId"]] == sorted((transaction_id, related_id)) and confirmed[0]["status"] == "confirmed", "confirmed connection did not normalize its pair"
+    assert private_json(base, path, cookie, method="PATCH", payload=decision)["decisions"] == confirmed, "same-status retry changed relationship timestamps"
+    reversed_decision = {"transactionId": related_id, "relatedTransactionId": transaction_id, "status": "dismissed"}
+    dismissed = private_json(base, path, cookie, method="PATCH", payload=reversed_decision)["decisions"]
+    assert len(dismissed) == 1 and dismissed[0]["status"] == "dismissed" and dismissed[0]["createdAt"] == confirmed[0]["createdAt"], "reversed pair created a second decision or lost its history"
+    assert private_json(base, path, cookie, method="PATCH", payload={**reversed_decision, "status": None}) == {"decisions": []}, "reset did not remove the saved decision"
+    final = private_json(base, path, cookie, method="PATCH", payload=decision)["decisions"]
+    assert private_json(base, "/api/transactions", cookie)["transactions"] == before, "connection decisions changed transaction amounts or classifications"
+    return final
 
 
 def check_activity(base, cookie):
@@ -268,7 +295,7 @@ def main():
                          "-e", "SAGA_FE_AUTH_FILE=/run/secrets/saga-fe/missing.json", image)
         containers.append(missing)
         base = wait_healthy(missing)
-        for path in ("/api/transactions", "/api/accounts", "/api/endpoints", "/api/endpoints/missing-opaque-fixture", "/api/transactions/missing-opaque-fixture", "/api/counterparties/missing-opaque-fixture", "/api/export?format=json", "/api/export?format=sqlite"):
+        for path in ("/api/transactions", "/api/accounts", "/api/endpoints", "/api/endpoints/missing-opaque-fixture", "/api/transactions/missing-opaque-fixture", "/api/counterparties/missing-opaque-fixture", "/api/relations", "/api/export?format=json", "/api/export?format=sqlite"):
             status, _, _ = request(base, path)
             assert status in (401, 403, 503), f"unauthenticated request was not denied: {path} ({status})"
         docker("stop", "--time", "1", missing)
@@ -291,7 +318,7 @@ def main():
             base = wait_healthy(container)
             check_script_assets(base, "/login")
             assert request(base, "/api/accounts")[0] == 401, "finance API did not require login"
-            for path in ("/api/endpoints", "/api/endpoints/missing-opaque-fixture", "/api/transactions/missing-opaque-fixture", "/api/counterparties/missing-opaque-fixture"):
+            for path in ("/api/endpoints", "/api/endpoints/missing-opaque-fixture", "/api/transactions/missing-opaque-fixture", "/api/counterparties/missing-opaque-fixture", "/api/relations"):
                 assert request(base, path)[0] == 401, "activity API did not require owner login"
             for format in ("json", "sqlite"):
                 assert request(base, "/api/export?format=" + format)[0] == 401, "export did not require owner login"
@@ -310,7 +337,7 @@ def main():
                 "accounts": [{"externalId": "fixture-cash", "name": "Synthetic account", "balance": 12345, "balanceDate": "2026-10-14"}],
                 "categories": [{"externalId": "fixture-food", "name": "Synthetic groceries"}],
                 "counterparties": [{"externalId": "fixture-merchant", "name": "Synthetic merchant"}],
-                "transactions": [{"externalId": "fixture-payment", "date": "2026-10-01", "amount": -105, "accountExternalId": "fixture-cash", "categoryExternalId": "fixture-food", "counterpartyExternalId": "fixture-merchant"}],
+                "transactions": [{"externalId": "fixture-payment", "date": "2026-10-01", "amount": -105, "accountExternalId": "fixture-cash", "categoryExternalId": "fixture-food", "counterpartyExternalId": "fixture-merchant"}, {"externalId": "fixture-payment-second", "date": "2026-10-02", "amount": -205, "accountExternalId": "fixture-cash", "categoryExternalId": "fixture-food", "counterpartyExternalId": "fixture-merchant"}],
             }}
             for _ in range(2):
                 assert request(base, "/api/ingest", "POST", ingest, cookie)[0] == 200, "synthetic ingestion failed"
@@ -321,23 +348,27 @@ def main():
             assert request(base, "/api/accounts", "PATCH", mutation, cookie)[0] == 200, "balance update failed"
             status, body, _ = request(base, "/api/transactions", cookie=cookie)
             assert status == 200, "transaction read failed"
-            transaction_id = json.loads(body)["transactions"][0]["id"]
+            transactions = json.loads(body)["transactions"]
+            transaction_id = next(transaction["id"] for transaction in transactions if transaction["amount"] == -105)
+            related_id = next(transaction["id"] for transaction in transactions if transaction["amount"] == -205)
             edits = {"overrides": {transaction_id: {"category": "Synthetic edited category", "kind": "expense", "excludeForecast": True}}}
             assert request(base, "/api/overrides", "PUT", edits, cookie)[0] == 200, "transaction edit save failed"
             settings = {"settings": {"horizon": 2, "lookback": 6, "balanceSource": "accounts", "fields": {"buffer": "1.05"}}}
             assert request(base, "/api/settings", "PUT", settings, cookie)[0] == 200, "settings save failed"
+            decisions = check_relations(base, cookie, transaction_id, related_id)
             docker("restart", "--time", "2", container)
             base = wait_healthy(container)
             status, body, _ = request(base, "/api/accounts", cookie=cookie)
             assert status == 200 and json.loads(body)["accounts"][0]["balance"] == 105, "balance did not persist"
             status, body, _ = request(base, "/api/transactions", cookie=cookie)
-            assert status == 200 and len(json.loads(body)["transactions"]) == 1, "idempotent ingest did not persist"
-            check_exports(base, cookie, container, account["id"], transaction_id)
+            assert status == 200 and len(json.loads(body)["transactions"]) == 2, "idempotent ingest did not persist"
+            assert private_json(base, "/api/relations", cookie)["decisions"] == decisions, "saved relationship decisions did not persist after restart"
+            check_exports(base, cookie, container, account["id"], transaction_id, decisions)
             docker("exec", container, "node", "scripts/backup.mjs", "/tmp/fixture-backup.sqlite")
-            verify = "import {DatabaseSync} from 'node:sqlite';const db=new DatabaseSync('/tmp/fixture-backup.sqlite',{readOnly:true});if(db.prepare('PRAGMA integrity_check').get().integrity_check!=='ok'||db.prepare('SELECT count(*) AS n FROM transactions').get().n!==1)process.exit(1);db.close();"
+            verify = "import {DatabaseSync} from 'node:sqlite';const db=new DatabaseSync('/tmp/fixture-backup.sqlite',{readOnly:true});if(db.prepare('PRAGMA integrity_check').get().integrity_check!=='ok'||db.prepare('PRAGMA foreign_key_check').all().length||db.prepare('PRAGMA user_version').get().user_version!==2||db.prepare('SELECT count(*) AS n FROM transactions').get().n!==2||db.prepare('SELECT count(*) AS n FROM transaction_relations WHERE status=?').get('confirmed').n!==1)process.exit(1);db.close();"
             docker("exec", container, "node", "--input-type=module", "-e", verify)
             check_activity(base, cookie)
-        print("Restricted runtime, owner login, ingestion, persistence, exports, SQLite recovery and payment/account detail APIs passed with synthetic data.")
+        print("Restricted runtime, owner login, ingestion, persistence, schema2 exports/recovery, saved connection decisions and payment/account detail APIs passed with synthetic data.")
     except Exception:
         # These isolated containers contain only the synthetic fixtures above.
         for container in containers:

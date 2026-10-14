@@ -22,24 +22,51 @@ CREATE TABLE IF NOT EXISTS ingest_batches (id TEXT PRIMARY KEY, source_id TEXT N
 CREATE TABLE IF NOT EXISTS ingest_rows (batch_id TEXT NOT NULL REFERENCES ingest_batches(id), row_number INTEGER NOT NULL, transaction_id TEXT NOT NULL REFERENCES transactions(id), fingerprint TEXT NOT NULL, occurrence INTEGER NOT NULL, raw_json TEXT NOT NULL, PRIMARY KEY(batch_id,row_number));
 CREATE TABLE IF NOT EXISTS transaction_edits (transaction_id TEXT PRIMARY KEY, value_json TEXT NOT NULL, updated_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value_json TEXT NOT NULL, updated_at TEXT NOT NULL);
-PRAGMA user_version=1;`;
+`;
+const relationSchema = `
+CREATE TABLE transaction_relations (
+  transaction_a TEXT NOT NULL REFERENCES transactions(id),
+  transaction_b TEXT NOT NULL REFERENCES transactions(id),
+  status TEXT NOT NULL CHECK(status IN ('confirmed','dismissed')),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY(transaction_a,transaction_b),
+  CHECK(transaction_a < transaction_b)
+);`;
+export const DATABASE_SCHEMA_VERSION = 2;
+const migrations = [null, schema, relationSchema];
 const now = () => new Date().toISOString();
 const own = (object, key) => Object.prototype.hasOwnProperty.call(object, key);
 export const LEDGER_TABLES = Object.freeze([
   'accounts', 'categories', 'counterparties', 'ingest_sources',
   'account_identifiers', 'category_identifiers', 'counterparty_identifiers',
   'balance_snapshots', 'transactions', 'source_transaction_keys',
-  'ingest_batches', 'ingest_rows', 'transaction_edits', 'settings'
+  'ingest_batches', 'ingest_rows', 'transaction_edits', 'settings', 'transaction_relations'
 ]);
 
 export function createStore(path = ':memory:') {
   if (path !== ':memory:') mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
   const db = new DatabaseSync(path);
-  if (path !== ':memory:') chmodSync(path, 0o600);
-  db.exec('PRAGMA foreign_keys=ON; PRAGMA busy_timeout=10000; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;');
-  const version = db.prepare('PRAGMA user_version').get().user_version;
-  if (version > 1) { db.close(); throw new Error('The database schema is newer than this application.'); }
-  db.exec(schema);
+  try {
+    if (path !== ':memory:') chmodSync(path, 0o600);
+    db.exec('PRAGMA foreign_keys=ON; PRAGMA busy_timeout=10000; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;');
+    const version = db.prepare('PRAGMA user_version').get().user_version;
+    if (version > DATABASE_SCHEMA_VERSION) throw new Error('The database schema is newer than this application.');
+    if (version < DATABASE_SCHEMA_VERSION) {
+      db.exec('BEGIN IMMEDIATE');
+      try {
+        // Another connection may finish a migration while this one waits for
+        // the writer lock. Recheck before applying or changing the version.
+        const lockedVersion = db.prepare('PRAGMA user_version').get().user_version;
+        if (lockedVersion > DATABASE_SCHEMA_VERSION) throw new Error('The database schema is newer than this application.');
+        for (let next = lockedVersion + 1; next <= DATABASE_SCHEMA_VERSION; next++) {
+          db.exec(migrations[next]);
+          db.exec(`PRAGMA user_version=${next}`);
+        }
+        db.exec('COMMIT');
+      } catch (error) { db.exec('ROLLBACK'); throw error; }
+    }
+  } catch (error) { db.close(); throw error; }
   const query = (sql, ...args) => db.prepare(sql).get(...args);
   const all = (sql, ...args) => db.prepare(sql).all(...args);
   const run = (sql, ...args) => db.prepare(sql).run(...args);
@@ -71,6 +98,24 @@ export function createStore(path = ':memory:') {
     return { accounts, totals };
   };
   const getOverrides = () => Object.fromEntries(all('SELECT transaction_id,value_json FROM transaction_edits ORDER BY transaction_id').map(row => [row.transaction_id, JSON.parse(row.value_json)]));
+  const relationRows = () => all('SELECT transaction_a AS transactionId,transaction_b AS relatedTransactionId,status,created_at AS createdAt,updated_at AS updatedAt FROM transaction_relations ORDER BY transaction_a,transaction_b');
+  const updateRelation = input => {
+    v.object(input, 'Relationship decision');
+    for (const key of Object.keys(input)) if (!['transactionId', 'relatedTransactionId', 'status'].includes(key)) throw new v.ValidationError('Unknown relationship decision field.');
+    const transactionId = v.string(input.transactionId, 'Transaction ID', 200), relatedTransactionId = v.string(input.relatedTransactionId, 'Related transaction ID', 200);
+    if (transactionId === relatedTransactionId) throw new v.ValidationError('A transaction cannot be connected to itself.');
+    if (input.status !== null && !['confirmed', 'dismissed'].includes(input.status)) throw new v.ValidationError('Relationship status must be confirmed, dismissed, or null to reset.');
+    const [first, second] = [transactionId, relatedTransactionId].sort();
+    return atomic(() => {
+      if (!query('SELECT id FROM transactions WHERE id=?', first) || !query('SELECT id FROM transactions WHERE id=?', second)) throw new v.ValidationError('Both transactions must exist in the ledger.');
+      if (input.status === null) run('DELETE FROM transaction_relations WHERE transaction_a=? AND transaction_b=?', first, second);
+      else {
+        const timestamp = now();
+        run('INSERT INTO transaction_relations(transaction_a,transaction_b,status,created_at,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(transaction_a,transaction_b) DO UPDATE SET status=excluded.status,updated_at=excluded.updated_at WHERE transaction_relations.status!=excluded.status', first, second, input.status, timestamp, timestamp);
+      }
+      return { decisions: relationRows() };
+    });
+  };
   const getSettings = () => { const row = query("SELECT value_json FROM settings WHERE key='forecast'"); return row ? { balanceSource: 'manual', ...JSON.parse(row.value_json) } : null; };
   const checkOverrideMap = overrides => {
     v.object(overrides, 'Transaction edits');
@@ -200,6 +245,7 @@ export function createStore(path = ':memory:') {
   };
   return {
     ingest, getTransactions, getAccounts: accountPayload,
+    getRelations: () => ({ decisions: relationRows() }), updateRelation,
     getEndpoints: () => readSnapshot(() => activityProjection().directory()),
     getEndpointActivity: id => readSnapshot(() => {
       v.string(id, 'Endpoint ID', 200); const result = activityProjection().endpointActivity(id);

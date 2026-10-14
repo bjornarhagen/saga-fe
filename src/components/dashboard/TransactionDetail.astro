@@ -22,7 +22,10 @@
       <button type="button" class="detail-mode-button" data-related-mode="related" aria-pressed="true" aria-controls="transaction-detail-related">Related payments</button>
       <button type="button" class="detail-mode-button" data-related-mode="duplicates" aria-pressed="false" aria-controls="transaction-detail-related">Possible duplicates</button>
     </div>
+    <label class="connection-status-filter">Connection status<select id="related-status" aria-controls="transaction-detail-related"><option value="active">Suggestions &amp; confirmed</option><option value="all">All connections</option><option value="suggested">Suggestions only</option><option value="confirmed">Confirmed only</option><option value="dismissed">Dismissed connections</option></select></label>
     <p class="input-note">Connections use saved sender/receiver identities or meaningful descriptions. Possible duplicates share a booking date, signed amount and route or description. These are suggestions for review; each entry remains in your ledger.</p>
+    <p class="input-note">Confirm or dismiss a connection between these two entries. Your decision is saved for both sides and can be reset. Confirming a connection keeps both entries separate; it does not confirm that they are duplicates.</p>
+    <p id="relation-save-status" class="detail-status" role="status" aria-live="polite" tabindex="-1"></p>
     <div class="table-scroll">
       <table class="detail-payments-table">
         <caption class="sr-only">Payments connected to this transaction</caption>

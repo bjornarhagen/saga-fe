@@ -18,10 +18,20 @@ flowchart LR
 
 The schema separates accounts and provider identifiers, categories and parent
 relationships, counterparties, transactions, balance snapshots, source records,
-import batches/rows, transaction corrections, and forecast settings. Foreign keys,
+import batches/rows, transaction corrections, connection decisions, and forecast settings. Foreign keys,
 explicit transactions, WAL, a busy timeout and full synchronization protect
 integrity. Source identifiers remain private; APIs use opaque IDs. Schema version
 is recorded with `PRAGMA user_version`; newer unsupported schemas are refused.
+
+Schema version 2 adds `transaction_relations`. Migration from version 1 is
+atomic and leaves existing records and import identities intact. Each relation
+stores two sorted transaction IDs, a `confirmed` or `dismissed` status, and
+timestamps. Foreign keys require both transactions to exist. Reversing the pair
+updates the same decision; resetting deletes only that decision. Repeating an
+unchanged decision is a no-op. Connections do not merge transactions or change
+amounts, classifications, account balances, or forecast calculations.
+An application that supports only schema version 1 refuses a version 2 ledger;
+rollback requires a compatible application or a matching pre-migration snapshot.
 
 Balances are dated facts, not sums reconstructed from an unknown opening balance.
 Each account has one forecast role: `available`, `reserve` or `excluded`. Unknown

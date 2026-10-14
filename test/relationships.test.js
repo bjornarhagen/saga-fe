@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { describeRelationship, normalizePaymentDescription, relatedTransactions } from '../src/lib/relationships.js';
+import { applyRelationshipDecisions, describeRelationship, normalizePaymentDescription, relatedTransactions } from '../src/lib/relationships.js';
 
 const transaction = overrides => ({
   id: 'selected', date: '2026-01-15', amount: -12000, currency: 'NOK',
@@ -182,4 +182,138 @@ test('ordering and optional limits are deterministic and input data remains unch
   assert.equal(JSON.stringify(rows), snapshot);
   assert.deepEqual(relatedTransactions(null, rows), []);
   assert.deepEqual(relatedTransactions(selected, null), []);
+});
+
+test('saved connection decisions apply in either pair order and filter active, suggested, confirmed and dismissed views', () => {
+  const selected = transaction({ counterpartyId: 'party-cafe' });
+  const rows = [
+    selected,
+    transaction({ id: 'suggestion', counterpartyId: 'party-cafe' }),
+    transaction({ id: 'confirmed', counterpartyId: 'party-cafe' }),
+    transaction({ id: 'dismissed', counterpartyId: 'party-cafe' }),
+  ];
+  const decisions = [
+    { transactionId: 'confirmed', relatedTransactionId: selected.id, status: 'confirmed' },
+    { transactionId: selected.id, relatedTransactionId: 'dismissed', status: 'dismissed' },
+  ];
+  const read = status => applyRelationshipDecisions(selected, rows, decisions, { status });
+  assert.deepEqual(read('active').map(row => [row.transaction.id, row.decisionStatus]), [['confirmed', 'confirmed'], ['suggestion', 'suggested']]);
+  assert.deepEqual(read('suggested').map(row => row.transaction.id), ['suggestion']);
+  assert.deepEqual(read('confirmed').map(row => row.transaction.id), ['confirmed']);
+  assert.deepEqual(read('dismissed').map(row => row.transaction.id), ['dismissed']);
+  assert.equal(read('all').length, 3);
+  assert.equal(read('confirmed')[0].reasons[0], 'Connection confirmed by you');
+  assert.equal(read('dismissed')[0].reasons[0], 'Connection dismissed by you');
+  const reversed = decisions.map(row => ({ ...row, transactionId: row.relatedTransactionId, relatedTransactionId: row.transactionId }));
+  assert.deepEqual(applyRelationshipDecisions(selected, rows, reversed), read('active'));
+});
+
+test('saved confirmed and dismissed pairs stay inspectable after heuristic evidence no longer matches', () => {
+  const selected = transaction({ description: 'Bank transfer', toEndpointId: 'recipient-a' });
+  const rows = [
+    transaction({ id: 'confirmed', description: 'Different transaction', fromAccountId: 'other-cash', accountId: 'other-cash', toEndpointId: 'recipient-b' }),
+    transaction({ id: 'dismissed', description: 'Another transfer', kind: 'transfer', toEndpointId: 'recipient-c' }),
+  ];
+  assert.deepEqual(relatedTransactions(selected, rows), []);
+  const decisions = rows.map(row => ({ transactionId: selected.id, relatedTransactionId: row.id, status: row.id }));
+  const confirmed = applyRelationshipDecisions(selected, rows, decisions, { status: 'confirmed' })[0];
+  const dismissed = applyRelationshipDecisions(selected, rows, decisions, { status: 'dismissed' })[0];
+  for (const row of [confirmed, dismissed]) {
+    assert.equal(row.relation, 'manual');
+    assert.equal(row.certainty, 'owner-decision');
+    assert.equal(row.possibleDuplicate, false);
+    assert.equal(row.reasons.length, 1);
+  }
+  assert.equal(applyRelationshipDecisions(selected, rows, decisions).length, 1);
+  assert.deepEqual(applyRelationshipDecisions(selected, rows, decisions, { mode: 'duplicates', status: 'all' }), []);
+});
+
+test('connection confirmation never creates or confirms a duplicate finding', () => {
+  const selected = transaction({ counterpartyId: 'party-cafe' });
+  const rows = [
+    transaction({ id: 'repeat', counterpartyId: 'party-cafe' }),
+    transaction({ id: 'later', counterpartyId: 'party-cafe', date: '2026-02-01' }),
+  ];
+  const decisions = rows.map(row => ({ transactionId: selected.id, relatedTransactionId: row.id, status: 'confirmed' }));
+  const duplicates = applyRelationshipDecisions(selected, rows, decisions, { mode: 'duplicates' });
+  assert.deepEqual(duplicates.map(row => row.transaction.id), ['repeat']);
+  assert.equal(duplicates[0].possibleDuplicate, true);
+  assert.equal(duplicates[0].decisionStatus, 'confirmed');
+  assert.equal(duplicates[0].reasons[0], 'Connection confirmed by you');
+  assert.ok(duplicates[0].reasons.every(reason => !/duplicate.*confirmed|confirmed.*duplicate/i.test(reason)));
+  assert.equal(applyRelationshipDecisions(selected, rows, decisions).find(row => row.transaction.id === 'later').possibleDuplicate, false);
+});
+
+test('dismissal hides a possible duplicate from active suggestions while retaining its review history', () => {
+  const selected = transaction();
+  const other = transaction({ id: 'repeat' });
+  const decisions = [{ transactionId: other.id, relatedTransactionId: selected.id, status: 'dismissed' }];
+  assert.deepEqual(applyRelationshipDecisions(selected, [other], decisions, { mode: 'duplicates' }), []);
+  const history = applyRelationshipDecisions(selected, [other], decisions, { mode: 'duplicates', status: 'dismissed' });
+  assert.equal(history.length, 1);
+  assert.equal(history[0].possibleDuplicate, true);
+  assert.equal(history[0].decisionStatus, 'dismissed');
+  const reset = applyRelationshipDecisions(selected, [other], []);
+  assert.equal(reset[0].decisionStatus, 'suggested');
+});
+
+test('orphan, self, unrelated, malformed and contradictory decisions are ignored deterministically', () => {
+  const selected = transaction();
+  const other = transaction({ id: 'suggestion' });
+  const invalid = [
+    null, 'confirmed', {},
+    { transactionId: selected.id, relatedTransactionId: 'missing', status: 'confirmed' },
+    { transactionId: selected.id, relatedTransactionId: selected.id, status: 'confirmed' },
+    { transactionId: 'different', relatedTransactionId: other.id, status: 'confirmed' },
+    { transactionId: selected.id, relatedTransactionId: other.id, status: 'invalid' },
+    { transactionId: selected.id, relatedTransactionId: other.id, status: null },
+    { transactionId: selected.id, relatedTransactionId: ` ${other.id}`, status: 'dismissed' },
+    { transactionId: selected.id, relatedTransactionId: ['suggestion'], status: 'dismissed' },
+    { transactionId: selected.id, relatedTransactionId: other.id, status: 'confirmed' },
+    { transactionId: other.id, relatedTransactionId: selected.id, status: 'dismissed' },
+  ];
+  const expected = applyRelationshipDecisions(selected, [other], []);
+  assert.deepEqual(applyRelationshipDecisions(selected, [other], invalid), expected);
+  assert.deepEqual(applyRelationshipDecisions(selected, [other], [...invalid].reverse()), expected);
+  assert.deepEqual(applyRelationshipDecisions(selected, [other], 'invalid'), expected);
+  assert.deepEqual(applyRelationshipDecisions(null, [other], invalid), []);
+  assert.deepEqual(applyRelationshipDecisions({ id: 'bad/id' }, [other], invalid), []);
+  assert.deepEqual(applyRelationshipDecisions({ id: 'trailing-newline\n' }, [other], invalid), []);
+  assert.deepEqual(applyRelationshipDecisions(selected, [transaction({ id: 'trailing-newline\n' })], []), []);
+  assert.deepEqual(applyRelationshipDecisions(selected, null, invalid), []);
+});
+
+test('saved decisions are specific to a pair and do not create transitive connections or collapse repeated rows', () => {
+  const selected = transaction({ description: 'First unique merchant', toEndpointId: 'first-merchant' });
+  const second = transaction({ id: 'second', description: 'Second unique merchant', toEndpointId: 'second-merchant' });
+  const third = transaction({ id: 'third', description: 'Third unique merchant', toEndpointId: 'third-merchant' });
+  const repeated = transaction({ id: 'repeat-first' });
+  const rows = [second, third, repeated];
+  const decisions = [
+    { transactionId: selected.id, relatedTransactionId: second.id, status: 'confirmed' },
+    { transactionId: second.id, relatedTransactionId: third.id, status: 'confirmed' },
+  ];
+  const result = applyRelationshipDecisions(selected, rows, decisions);
+  assert.deepEqual(result.map(row => row.transaction.id), [second.id]);
+  assert.equal(rows.length, 3);
+  assert.equal(result[0].transaction, second);
+});
+
+test('decision ordering, limits and frozen inputs preserve financial rows and existing heuristic output', () => {
+  const selected = Object.freeze(transaction());
+  const rows = Object.freeze([
+    Object.freeze(transaction({ id: 'strong-suggestion' })),
+    Object.freeze(transaction({ id: 'manual-confirmed', date: '2025-01-01', description: 'Another merchant', toEndpointId: 'another-recipient' })),
+    Object.freeze(transaction({ id: 'second-suggestion', date: '2026-02-01' })),
+  ]);
+  const decisions = Object.freeze([Object.freeze({ transactionId: selected.id, relatedTransactionId: 'manual-confirmed', status: 'confirmed', createdAt: '2026-02-01T00:00:00Z', updatedAt: '2026-02-01T00:00:00Z' })]);
+  const snapshot = JSON.stringify({ selected, rows, decisions });
+  const heuristic = relatedTransactions(selected, rows);
+  const result = applyRelationshipDecisions(selected, rows, decisions);
+  assert.deepEqual(result.map(row => row.transaction.id), ['manual-confirmed', 'strong-suggestion', 'second-suggestion']);
+  assert.deepEqual(applyRelationshipDecisions(selected, [...rows].reverse(), decisions), result);
+  assert.equal(applyRelationshipDecisions(selected, rows, decisions, { limit: 1 })[0].transaction.id, 'manual-confirmed');
+  assert.deepEqual(applyRelationshipDecisions(selected, rows, decisions, { limit: 0 }), []);
+  assert.equal(JSON.stringify({ selected, rows, decisions }), snapshot);
+  assert.deepEqual(relatedTransactions(selected, rows), heuristic);
 });

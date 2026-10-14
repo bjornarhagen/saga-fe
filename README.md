@@ -94,6 +94,16 @@ route or description without a known route conflict. A shared owned account or
 amount alone is insufficient. These suggestions do not merge, remove or edit
 payments. They can miss duplicates whose dates or amounts differ.
 
+For each connected pair, choose **Confirm connection** or **Dismiss connection**.
+The decision is saved in the ledger and applies when viewing either transaction.
+The status filter shows suggestions, confirmed connections, or dismissed
+connections. Dismissed pairs leave the default view and remain available for
+review. **Reset to suggestion** clears the decision. Confirmed connections stay
+visible even if later source corrections stop the automatic match. Confirmation
+does not assert a duplicate or change either transaction, and decisions apply
+to the selected pair only; they do not automatically group other payments.
+Repeated imports keep these decisions. Both complete export formats include them.
+
 Account movement totals infer matching debit/credit legs of internal bank
 transfers and count each pair once. Both original entries remain inspectable,
 with the pair marked in the history. Without provider transaction IDs this

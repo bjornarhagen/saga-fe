@@ -1,4 +1,4 @@
-import { relatedTransactions } from '../lib/relationships.js';
+import { applyRelationshipDecisions } from '../lib/relationships.js';
 import { routeHash } from './routes.js';
 
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -11,11 +11,12 @@ const definition = fields => `<dl>${fields.map(([label, value]) => `<dt>${esc(la
 const safeValue = value => esc(typeof value === 'object' && value !== null ? JSON.stringify(value) : value ?? 'Unknown');
 const link = (view, id, name) => `<a class="ledger-link" href="${esc(routeHash({ view, id }))}">${esc(name)}</a>`;
 
-export function createExplorer({ api, exactMoney, dateText, getTransactions, editTransaction }) {
+export function createExplorer({ api, exactMoney, dateText, getTransactions, editTransaction, notify = () => {} }) {
   let endpoints = [], endpointById = new Map(), route = null, requestGeneration = 0;
   let directoryPage = 0, endpointPage = 0, relatedPage = 0, relatedMode = 'related';
   const detailStates = new Map();
-  let accountDetail = null, transactionDetail = null, connections = [];
+  let accountDetail = null, transactionDetail = null, decisions = [];
+  let decisionVersion = 0, decisionsAvailable = false, decisionBusy = false;
   const endpoint = id => endpointById.get(id);
   const endpointLink = (node, unknown = 'Unknown') => node ? link('account', node.id, node.name) : `<span class="muted">${unknown}</span>`;
   const rowRoute = row => `${endpointLink(row.fromEndpoint || endpoint(row.fromEndpointId), 'Unknown sender')} <span aria-hidden="true">→</span> ${endpointLink(row.toEndpoint || endpoint(row.toEndpointId), 'Unknown receiver')}`;
@@ -35,17 +36,36 @@ export function createExplorer({ api, exactMoney, dateText, getTransactions, edi
     $('endpoint-directory-count').textContent = `${rows.length} identities`;
     $('endpoint-directory-list').innerHTML = page.shown.length ? page.shown.map(node => `<div class="endpoint-directory-item"><div class="endpoint-name">${endpointLink(node)}<small>${node.owned ? 'My account' : node.kind === 'counterparty' ? 'External party' : 'External account'}${node.counterpartyName && node.counterpartyName !== node.name ? ` · ${esc(node.counterpartyName)}` : ''}</small></div><div class="endpoint-meta">${paymentsLabel(node.summary.payments)} · ${node.summary.transactionRows} entries<small>In ${exactMoney(node.summary.incoming)} · Out ${exactMoney(node.summary.outgoing)}</small></div></div>`).join('') : '<p class="no-results">No saved identities match these filters.</p>';
   }
-  function paymentRow(row, note = '', flow = false) {
+  function paymentRow(row, note = '', flow = false, actions = '') {
     const amount = flow ? row.flowAmount : row.amount;
     const movement = flow ? { incoming: 'Incoming', outgoing: 'Outgoing', self: 'Between the same account', unknown: 'Direction unknown' }[row.flowDirection] : '';
-    return `<tr><td>${esc(dateText(row.date))}${movement ? `<small>${movement}</small>` : ''}</td><td>${link('transaction', row.id, row.description || 'Untitled transaction')}<small>${esc(row.category)} · ${kinds[row.kind] || esc(row.kind)}</small>${note ? `<small>${note}</small>` : ''}</td><td>${rowRoute(row)}</td><td class="numeric ${amount > 0 ? 'positive' : ''}">${signed(amount)}${flow && row.amount !== amount ? `<small>Ledger entry ${signed(row.amount)}</small>` : ''}</td></tr>`;
+    return `<tr><td>${esc(dateText(row.date))}${movement ? `<small>${movement}</small>` : ''}</td><td>${link('transaction', row.id, row.description || 'Untitled transaction')}<small>${esc(row.category)} · ${kinds[row.kind] || esc(row.kind)}</small>${note ? `<small>${note}</small>` : ''}${actions}</td><td>${rowRoute(row)}</td><td class="numeric ${amount > 0 ? 'positive' : ''}">${signed(amount)}${flow && row.amount !== amount ? `<small>Ledger entry ${signed(row.amount)}</small>` : ''}</td></tr>`;
   }
   function renderConnections() {
     document.querySelectorAll('[data-related-mode]').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.relatedMode === relatedMode)));
-    const rows = relatedMode === 'duplicates' ? connections.filter(match => match.possibleDuplicate) : connections;
+    $('related-status').disabled = !decisionsAvailable;
+    if (!transactionDetail) {
+      $('transaction-detail-related').innerHTML = ''; $('related-count').textContent = ''; $('related-page-label').textContent = '';
+      $('related-previous').disabled = true; $('related-next').disabled = true;
+      return;
+    }
+    if (!decisionsAvailable) {
+      $('transaction-detail-related').innerHTML = '<tr><td colspan="4" class="no-results">Saved connection decisions are unavailable. Refresh the page to review connections.</td></tr>';
+      $('related-count').textContent = 'Connection status unknown'; $('related-page-label').textContent = '';
+      $('related-previous').disabled = true; $('related-next').disabled = true;
+      return;
+    }
+    const rows = applyRelationshipDecisions(transactionDetail.transaction, getTransactions(), decisions, { mode: relatedMode, status: $('related-status').value });
     const page = paginate(rows, relatedPage, 'related'); relatedPage = page.page;
     $('related-count').textContent = `${rows.length} ${relatedMode === 'duplicates' ? 'possible duplicates' : 'related entries'} · all saved history`;
-    $('transaction-detail-related').innerHTML = page.shown.length ? page.shown.map(match => paymentRow(match.transaction, `${match.possibleDuplicate ? '<span class="review-tag">Possible duplicate · </span>' : ''}${esc(match.reasons.join(' · '))}`)).join('') : `<tr><td colspan="4" class="no-results">${relatedMode === 'duplicates' ? 'No possible duplicates found by these rules.' : 'No related payments found in the saved history.'}</td></tr>`;
+    $('transaction-detail-related').innerHTML = page.shown.length ? page.shown.map(match => {
+      const status = match.decisionStatus;
+      const stateLabel = { suggested: 'Suggested connection', confirmed: 'Connection confirmed by you', dismissed: 'Connection dismissed by you' }[status];
+      const reasons = match.reasons.filter(reason => !['Connection confirmed by you', 'Connection dismissed by you'].includes(reason));
+      const actions = [['confirmed', 'Confirm connection'], ['dismissed', 'Dismiss connection'], ['reset', 'Reset to suggestion']].filter(([action]) => action === 'reset' ? status !== 'suggested' : action !== status);
+      const controls = `<div class="relation-actions">${actions.map(([action, label]) => `<button type="button" class="outline-button" data-relation-id="${esc(match.transaction.id)}" data-relation-action="${action}" aria-label="${esc(label + ' with ' + match.transaction.description)}" ${decisionBusy || !decisionsAvailable ? 'disabled' : ''}>${label}</button>`).join('')}</div>`;
+      return paymentRow(match.transaction, `<span class="relation-state ${status}">${stateLabel}</span><br>${match.possibleDuplicate ? '<span class="review-tag">Possible duplicate · </span>' : ''}${reasons.length ? esc(reasons.join(' · ')) : 'Saved decision; the current rules do not suggest this pair.'}`, false, controls);
+    }).join('') : '<tr><td colspan="4" class="no-results">No connections match this view and status filter.</td></tr>';
   }
   function renderTransaction() {
     const { transaction: row, original, override = {}, from, to, provenance = [] } = transactionDetail;
@@ -67,7 +87,6 @@ export function createExplorer({ api, exactMoney, dateText, getTransactions, edi
     ])}<p class="input-note">Changing the classification keeps the imported payment and its identities.</p></article></div>
     <article class="card detail-info-card"><div class="card-heading"><h2>Import history</h2></div>${provenance.length ? definition(provenance.map(item => [item.importedAt?.slice(0, 10) || 'Import', `${esc(item.adapter)} · ${esc(item.filename || 'Unnamed input')} · row ${esc(item.rowNumber ?? 'unknown')}`])) : '<p class="input-note">No source row history is saved for this entry.</p>'}
     <details class="source-fields"><summary>Original source fields from the latest import</summary>${Object.keys(sourceFields).length ? definition(Object.entries(sourceFields).map(([key, value]) => [key, safeValue(value)])) : '<p class="input-note">No original fields are available.</p>'}</details></article>`;
-    connections = relatedTransactions(row, getTransactions(), { mode: 'all', limit: Infinity });
     renderConnections();
   }
   function renderEndpointRows() {
@@ -96,20 +115,20 @@ export function createExplorer({ api, exactMoney, dateText, getTransactions, edi
   }
   async function openRoute(next, { focus = false } = {}) {
     const changed = routeHash(route || {}) !== routeHash(next);
-    if (changed && route?.view === 'transaction') detailStates.set(routeHash(route), { relatedPage, relatedMode });
+    if (changed && route?.view === 'transaction') detailStates.set(routeHash(route), { relatedPage, relatedMode, status: $('related-status').value });
     if (changed && route?.view === 'account') detailStates.set(routeHash(route), { endpointPage, search: $('endpoint-search').value, direction: $('endpoint-direction').value });
     route = next; const generation = ++requestGeneration;
     if (!['account', 'transaction'].includes(next.view)) return;
     const transaction = next.view === 'transaction', prefix = transaction ? 'transaction-detail' : 'account-detail';
     if (changed) {
       const remembered = detailStates.get(routeHash(next));
-      if (transaction) { relatedPage = remembered?.relatedPage || 0; relatedMode = remembered?.relatedMode || 'related'; }
+      if (transaction) { relatedPage = remembered?.relatedPage || 0; relatedMode = remembered?.relatedMode || 'related'; $('related-status').value = remembered?.status || 'active'; if (decisionsAvailable && !decisionBusy) $('relation-save-status').textContent = ''; }
       else { endpointPage = remembered?.endpointPage || 0; $('endpoint-search').value = remembered?.search || ''; $('endpoint-direction').value = remembered?.direction || 'all'; }
     }
     $(prefix + '-status').textContent = 'Reading saved details…';
     $(prefix + '-title').textContent = transaction ? 'Transaction details.' : 'Account details.';
     $(prefix + '-body').innerHTML = '';
-    if (transaction) { transactionDetail = null; connections = []; $('edit-detail-transaction').disabled = true; const rememberedPage = relatedPage; renderConnections(); relatedPage = rememberedPage; $('related-count').textContent = ''; }
+    if (transaction) { transactionDetail = null; $('edit-detail-transaction').disabled = true; renderConnections(); }
     else { accountDetail = null; $('account-detail-summary').innerHTML = ''; $('account-detail-identifiers').innerHTML = ''; $('endpoint-transactions').innerHTML = ''; $('endpoint-count').textContent = ''; $('endpoint-scope-note').textContent = ''; }
     try {
       const result = await api(`/api/${transaction ? 'transactions' : 'endpoints'}/${encodeURIComponent(next.id)}`);
@@ -130,10 +149,36 @@ export function createExplorer({ api, exactMoney, dateText, getTransactions, edi
     ['related', renderConnections, () => relatedPage, value => { relatedPage = value; }]
   ]) for (const [suffix, change] of [['previous', -1], ['next', 1]]) $(prefix + '-' + suffix).addEventListener('click', () => { write(read() + change); render(); });
   document.querySelectorAll('[data-related-mode]').forEach(button => button.addEventListener('click', () => { relatedMode = button.dataset.relatedMode; relatedPage = 0; renderConnections(); }));
+  $('related-status').addEventListener('change', () => { relatedPage = 0; renderConnections(); });
+  $('transaction-detail-related').addEventListener('click', async event => {
+    const button = event.target.closest('button[data-relation-id]');
+    if (!button || !transactionDetail || decisionBusy || !decisionsAvailable) return;
+    const selectedId = transactionDetail.transaction.id, relatedId = button.dataset.relationId;
+    const status = button.dataset.relationAction === 'reset' ? null : button.dataset.relationAction;
+    decisionBusy = true; decisionVersion++; renderConnections();
+    $('relation-save-status').textContent = 'Saving your connection decision…';
+    try {
+      const result = await api('/api/relations', { method: 'PATCH', body: { transactionId: selectedId, relatedTransactionId: relatedId, status } });
+      decisions = result.decisions; decisionsAvailable = true;
+      $('relation-save-status').textContent = status === 'confirmed' ? 'Connection confirmed for both transactions.' : status === 'dismissed' ? 'Connection dismissed. Use the dismissed filter to review or undo it.' : 'Decision reset. The connection is suggested again if the matching rules still apply.';
+      if (route?.view !== 'transaction' || route.id !== selectedId) $('relation-save-status').textContent = 'Your previous connection decision was saved.';
+    } catch (error) {
+      decisionsAvailable = false;
+      const previous = route?.view !== 'transaction' || route.id !== selectedId;
+      const message = `The ${previous ? 'previous connection decision' : 'save'} could not be verified. Refresh the page to check. ${error.message}`;
+      $('relation-save-status').textContent = message;
+      if (previous) notify(message);
+    }
+    finally { decisionBusy = false; decisionVersion++; renderConnections(); }
+    if (route?.view === 'transaction' && route.id === selectedId) $('relation-save-status').focus({ preventScroll: true });
+  });
   $('edit-detail-transaction').addEventListener('click', () => { if (transactionDetail) editTransaction(transactionDetail.transaction.id); });
   return {
     setEndpoints(rows) { endpoints = rows; endpointById = new Map(rows.map(node => [node.id, node])); $('endpoint-directory-status').textContent = ''; renderDirectory(); },
     directoryError() { $('endpoint-directory-status').textContent = 'The identity directory could not be loaded. Refresh the ledger to try again.'; },
+    decisionVersion: () => decisionVersion,
+    setDecisions(rows, expectedVersion = decisionVersion) { if (expectedVersion !== decisionVersion) return; decisions = rows; decisionsAvailable = true; if (!decisionBusy) $('relation-save-status').textContent = ''; renderConnections(); },
+    decisionError(expectedVersion = decisionVersion) { if (expectedVersion !== decisionVersion) return; decisionsAvailable = false; $('relation-save-status').textContent = 'Saved connection decisions could not be loaded. Refresh the ledger before reviewing suggestions.'; renderConnections(); },
     endpointForAccount(id) { return endpoints.find(node => node.accountId === id); },
     endpointLink, openRoute,
     refresh() { return route ? openRoute(route) : Promise.resolve(); }

@@ -126,6 +126,49 @@ export function relatedTransactions(selected, transactions, { mode = 'related', 
   return matches.slice(0, Number.isInteger(limit) && limit >= 0 ? limit : Infinity);
 }
 
+/** Apply saved, undirected connection decisions to the current suggestions.
+ * Decisions concern a connection, never whether two financial rows are the
+ * same payment. Duplicate suggestions always come from the current matcher.
+ * A saved pair remains inspectable after its heuristic evidence changes. */
+export function applyRelationshipDecisions(selected, transactions, decisions = [], { mode = 'related', status = 'active', limit = Infinity } = {}) {
+  if (!validTransactionId(selected?.id) || !Array.isArray(transactions)) return [];
+  const known = new Map(transactions.filter(row => validTransactionId(row?.id)).map(row => [row.id, row]));
+  const selectedId = selected.id, saved = new Map(), conflicts = new Set();
+  for (const decision of Array.isArray(decisions) ? decisions : []) {
+    if (!decision || !validTransactionId(decision.transactionId) || !validTransactionId(decision.relatedTransactionId)
+      || !['confirmed', 'dismissed'].includes(decision.status) || decision.transactionId === decision.relatedTransactionId) continue;
+    const otherId = decision.transactionId === selectedId ? decision.relatedTransactionId
+      : decision.relatedTransactionId === selectedId ? decision.transactionId : null;
+    if (!otherId || !known.has(otherId) || conflicts.has(otherId)) continue;
+    // The database has one decision per pair. Ignore contradictory duplicate
+    // input instead of letting array order invent an owner's preference.
+    if (saved.has(otherId) && saved.get(otherId) !== decision.status) {
+      saved.delete(otherId); conflicts.add(otherId);
+    } else saved.set(otherId, decision.status);
+  }
+  const matches = new Map(relatedTransactions(selected, [...known.values()], { mode: 'related', limit: Infinity })
+    .map(match => [match.transaction.id, { ...match, reasons: [...match.reasons], decisionStatus: 'suggested' }]));
+  for (const [id, decisionStatus] of saved) {
+    const match = matches.get(id) || {
+      transaction: known.get(id), reasons: [], relation: 'manual',
+      possibleDuplicate: false, certainty: 'owner-decision', strength: 0,
+    };
+    matches.set(id, {
+      ...match, decisionStatus,
+      reasons: [`Connection ${decisionStatus} by you`, ...match.reasons],
+    });
+  }
+  const filter = ['active', 'suggested', 'confirmed', 'dismissed', 'all'].includes(status) ? status : 'active';
+  const rank = { confirmed: 0, suggested: 1, dismissed: 2 };
+  const results = [...matches.values()].filter(match => (mode !== 'duplicates' || match.possibleDuplicate)
+    && (filter === 'all' || (filter === 'active' ? match.decisionStatus !== 'dismissed' : match.decisionStatus === filter)));
+  results.sort((a, b) => rank[a.decisionStatus] - rank[b.decisionStatus] || b.strength - a.strength
+    || compareText(b.transaction.date, a.transaction.date) || compareText(a.transaction.id, b.transaction.id));
+  return results.slice(0, Number.isInteger(limit) && limit >= 0 ? limit : Infinity);
+}
+
+function validTransactionId(value) { return typeof value === 'string' && value.trim() === value && /^[A-Za-z0-9_:-]{1,200}$/.test(value); }
+
 function compareText(left, right) {
   const a = String(left || ''), b = String(right || '');
   return a < b ? -1 : a > b ? 1 : 0;

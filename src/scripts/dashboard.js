@@ -76,7 +76,7 @@ function persist() {
     if (next) enqueueSettings(next);
   }, 500);
 }
-const explorer = createExplorer({ api, exactMoney, dateText, getTransactions: () => state.transactions, editTransaction });
+const explorer = createExplorer({ api, exactMoney, dateText, getTransactions: () => state.transactions, editTransaction, notify: toast });
 const accountController = createAccountController({ api, money, today, onChange: () => loadLocal(), onUse: () => { state.balanceSource = 'accounts'; renderForecast(); persist(); showView('forecast'); }, onError: handleError, toast,
   activityLink: account => { const node = explorer.endpointForAccount(account.id); return node ? `<p class="input-note">${explorer.endpointLink({ ...node, name: 'View payment history →' })}</p>` : ''; }
 });
@@ -294,6 +294,7 @@ function clearFilters() { $('search').value = ''; $('category-filter').value = '
 let loadGeneration = 0;
 async function loadLocal() {
   const generation = ++loadGeneration;
+  const decisionReadVersion = explorer.decisionVersion();
   const payload = await api('/api/transactions');
   if (!loaded) {
     if (payload.settings === null && Object.keys(saved).length) {
@@ -306,10 +307,13 @@ async function loadLocal() {
   }
   let directory;
   try { directory = (await api('/api/endpoints')).endpoints; } catch { /* Keep the main ledger usable if its directory fails. */ }
+  let decisions;
+  try { decisions = (await api('/api/relations')).decisions; } catch { /* Connection review remains disabled until saved decisions are available. */ }
   if (generation !== loadGeneration) return;
   if (!loaded) applySettings(payload.settings);
   state.data = payload; state.overrides = payload.overrides || {}; state.imported = false;
   if (directory) explorer.setEndpoints(directory); else explorer.directoryError();
+  if (decisions) explorer.setDecisions(decisions, decisionReadVersion); else explorer.decisionError(decisionReadVersion);
   accountController.setData(payload.accountDetails || []);
   loaded = true; initializeData();
   try {

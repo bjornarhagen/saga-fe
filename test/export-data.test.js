@@ -15,18 +15,20 @@ test('complete JSON archive covers every schema table and preserves all saved le
     accounts: [{ externalId: 'fixture-account', name: 'Fé · øre', balance: 105, balanceDate: '2026-01-01' }],
     categories: [{ externalId: 'parent', name: 'Parent' }, { externalId: 'child', name: 'Child', parentExternalId: 'parent' }],
     counterparties: [{ externalId: 'fixture-party', name: 'Example sender / receiver' }],
-    transactions: [{ externalId: 'fixture-payment', date: '2026-01-01', amount: -105, description: 'Example payment', accountExternalId: 'fixture-account', categoryExternalId: 'parent', subcategoryExternalId: 'child', counterpartyExternalId: 'fixture-party' }]
+    transactions: [{ externalId: 'fixture-payment', date: '2026-01-01', amount: -105, description: 'Example payment', accountExternalId: 'fixture-account', categoryExternalId: 'parent', subcategoryExternalId: 'child', counterpartyExternalId: 'fixture-party' }, { externalId: 'fixture-related-payment', date: '2026-01-02', amount: -210, description: 'Another example payment', accountExternalId: 'fixture-account', categoryExternalId: 'parent', counterpartyExternalId: 'fixture-party' }]
   };
   store.ingest({ adapter: 'canonical-v1', sourceKey: 'archive-fixture', data });
   const account = store.getAccounts().accounts[0];
   store.updateAccount({ id: account.id, name: 'Owner label', role: 'reserve', balance: null, balanceDate: '2026-01-02' });
-  const id = store.getTransactions().transactions[0].id;
+  const transactions = store.getTransactions().transactions;
+  const id = transactions[0].id;
+  store.updateRelation({ transactionId: id, relatedTransactionId: transactions[1].id, status: 'confirmed' });
   store.updateOverride({ id, override: { category: 'Owner category', excludeForecast: true } });
   store.saveSettings({ fields: { cash: '-1.05', 'balance-date': '2026-01-02' }, assumptions: { income: 10000 }, balanceSource: 'manual' });
   const archive = JSON.parse(JSON.stringify(store.exportLedger()));
   assert.equal(archive.format, 'saga-fe-ledger');
   assert.equal(archive.formatVersion, 1);
-  assert.equal(archive.databaseSchemaVersion, 1);
+  assert.equal(archive.databaseSchemaVersion, 2);
   assert.equal(archive.amountUnit, 'ore');
   assert.equal(archive.currency, 'NOK');
   assert.ok(Number.isFinite(Date.parse(archive.exportedAt)));
@@ -42,6 +44,7 @@ test('complete JSON archive covers every schema table and preserves all saved le
   assert.deepEqual(archive.tables.balance_snapshots.map(row => row.amount), [105, null]);
   assert.equal(archive.tables.accounts[0].name_override, 1);
   assert.equal(archive.tables.transactions[0].amount, -105);
+  assert.equal(archive.tables.transaction_relations[0].status, 'confirmed');
   assert.equal(JSON.parse(archive.tables.ingest_rows[0].raw_json).externalId, 'fixture-payment');
   assert.equal(JSON.parse(archive.tables.transaction_edits[0].value_json).category, 'Owner category');
   assert.equal(JSON.parse(archive.tables.settings[0].value_json).fields.cash, '-1.05');

@@ -46,12 +46,18 @@ strings, so parse those fields separately when using the archive in another tool
 | `categories`, `counterparties` | Category hierarchy and sender/receiver names. |
 | `account_identifiers`, `category_identifiers`, `counterparty_identifiers` | Provider identifiers and links to ledger entities. |
 | `transactions`, `transaction_edits` | Source transactions and separate owner corrections. |
+| `transaction_relations` | Confirmed or dismissed transaction pairs, with creation and update timestamps. |
 | `ingest_sources`, `ingest_batches`, `ingest_rows`, `source_transaction_keys` | Source identities, complete batch history, parsed row provenance and deduplication keys. |
 | `settings` | Forecast inputs, assumptions and other saved ledger settings. |
 
 All tables are read in one database transaction. Concurrent writes cannot mix
 different committed states within one archive. The export refuses an unknown
 table set instead of silently leaving out newly added data.
+
+Database schema version 2 adds saved connection decisions. The JSON archive
+format remains version 1; `databaseSchemaVersion` and the table set identify
+the stored schema. A connection decision links two opaque transaction IDs and
+never merges their financial records.
 
 This full archive is separate from the `canonical-v1` ingest format. It cannot
 be uploaded through the import picker to restore the database. Use the SQLite

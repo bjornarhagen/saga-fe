@@ -363,6 +363,12 @@ input[readonly] { color: var(--fg-dim); background: var(--bg-2); }
 .source-fields { margin-top: var(--s-5); min-width: 0; }
 .source-fields summary { cursor: pointer; color: var(--link); font-family: var(--font-mono); font-size: 11px; line-height: 1.8; }
 .source-fields[open] > dl { margin-top: var(--s-4); }
+.connection-status-filter { max-width: 330px; margin-bottom: var(--s-4); }
+.relation-actions { display: flex; flex-wrap: wrap; gap: var(--s-2); margin-top: var(--s-3); }
+.relation-actions .outline-button { min-height: 36px; padding: var(--s-2) var(--s-3); font-size: 10px; }
+.relation-state { display: inline-block; font-family: var(--font-mono); margin-block: var(--s-2); }
+.relation-state.confirmed { color: var(--positive-text); }
+.relation-state.dismissed { color: var(--fg-dim); }
 .endpoint-summary .metric-value { font-size: clamp(18px, 2.8vw, 30px); overflow-wrap: anywhere; }
 .detail-identifiers { min-width: 0; }
 .detail-identifiers code { font-family: var(--font-mono); font-size: 11px; overflow-wrap: anywhere; }
