@@ -2,10 +2,11 @@
 import '../styles/fonts.css';
 import '../styles/theme.css';
 import '../styles/dashboard.css';
+import { THEMES } from '../scripts/themes.js';
 ---
 <!doctype html>
-<html lang="en" data-theme="bjornarhagen" data-mode="dark">
-  <head><meta charset="utf-8" /><meta name="viewport" content="width=device-width,initial-scale=1" /><title>Owner sign-in — Saga Fé</title><link rel="icon" href="/favicon.svg" type="image/svg+xml" /></head>
+<html lang="en" data-theme="bjornarhagen" data-mode="dark" data-mode-preference="dark" data-theme-options={THEMES.map(theme => theme.id).join(',')}>
+  <head><meta charset="utf-8" /><meta name="viewport" content="width=device-width,initial-scale=1" /><title>Owner sign-in — Saga Fé</title><link rel="icon" href="/favicon.svg" type="image/svg+xml" /><script is:inline src="/theme.js"></script></head>
   <body class="login-body">
     <main class="login-panel card">
       <p class="eyebrow">SAGA / FÉ / PRIVATE LEDGER</p><h1>For your eyes.</h1>

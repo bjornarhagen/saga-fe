@@ -21,7 +21,7 @@ export function createAccountController({ api, money, today, onChange, onUse, on
     const group = role => accounts.filter(a => a.role === role);
     const totals = ['available', 'reserve', 'excluded'].map(role => {
       const rows = group(role), known = rows.filter(a => a.balance !== null);
-      const total = known.reduce((sum, a) => sum + a.balance, 0);
+      const total = Number(known.reduce((sum, a) => sum + BigInt(a.balance), 0n));
       return { role, total, known: known.length, missing: rows.length - known.length, rows: rows.length };
     });
     $('account-summary').innerHTML = totals.map(({ role, total, known, missing, rows }) => `<article class="metric"><div class="metric-label">${{ available: 'Available cash', reserve: 'Savings reserve', excluded: 'Excluded accounts' }[role]}</div><div class="metric-value">${known || !rows ? money(total) : 'Not set'}</div><div class="metric-note">${missing ? `${missing} balance${missing === 1 ? '' : 's'} unknown · known subtotal only` : `${rows} account${rows === 1 ? '' : 's'}`}</div></article>`).join('');
