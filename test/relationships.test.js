@@ -142,6 +142,58 @@ test('owned endpoints recovered from source metadata do not relate every payment
   assert.equal(describeRelationship(selected, other), null);
 });
 
+test('bank text endpoint and derived party IDs remain text suggestions rather than account identity proof', () => {
+  const node = { id: 'merchant-hint', kind: 'merchant-hint', owned: false, counterpartyId: 'party-from-text', evidence: { kind: 'merchant-hint', requiresConfirmation: true } };
+  const selected = transaction({ counterpartyId: 'party-from-text', toEndpointId: node.id, toEndpoint: node });
+  const other = transaction({ id: 'same-hint', counterpartyId: 'party-from-text', toEndpointId: node.id, toEndpoint: node, description: 'Another purchase memo' });
+  const result = describeRelationship(selected, other);
+  assert.equal(result.certainty, 'text-hint-suggestion');
+  assert.equal(result.relation, 'description');
+  assert.equal(result.possibleDuplicate, true);
+  assert.ok(result.reasons.includes('Same merchant text hint; account membership is unconfirmed'));
+  assert.ok(!result.reasons.includes('Same counterparty identity'));
+  const confirmedPair = applyRelationshipDecisions(selected, [other], [{ transactionId: selected.id, relatedTransactionId: other.id, status: 'confirmed' }])[0];
+  assert.equal(confirmedPair.decisionStatus, 'confirmed');
+  assert.equal(confirmedPair.certainty, 'text-hint-suggestion');
+});
+
+test('recorded source identifiers do not become owner confirmations and retain strict duplicate criteria', () => {
+  const node = { id: 'recorded-account', kind: 'external-account', owned: false, evidence: { kind: 'source-account-identifier', requiresConfirmation: true } };
+  const selected = transaction({ toEndpointId: node.id, toEndpoint: node });
+  const other = transaction({ id: 'same-account', toEndpointId: node.id, toEndpoint: node });
+  const result = describeRelationship(selected, other);
+  assert.equal(result.certainty, 'recorded-source-match');
+  assert.ok(result.reasons.includes('Same recorded external account identifier'));
+  assert.ok(result.reasons.every(reason => !/confirmed by you/.test(reason)));
+  assert.equal(result.possibleDuplicate, true);
+  assert.equal(describeRelationship(selected, { ...other, amount: -12001 }).possibleDuplicate, false);
+  assert.equal(describeRelationship(selected, { ...other, date: '2026-01-16' }).possibleDuplicate, false);
+});
+
+test('unknown placeholders and explicit source-membership denials cannot imply a shared external account', () => {
+  const unknown = { id: 'unknown-placeholder', kind: 'unknown-endpoint', owned: false, counterpartyId: 'placeholder-party', evidence: { kind: 'unknown' } };
+  const selected = transaction({ counterpartyId: 'placeholder-party', toEndpointId: unknown.id, toEndpoint: unknown, description: 'First unique memo' });
+  const other = transaction({ id: 'unknown-peer', counterpartyId: 'placeholder-party', toEndpointId: unknown.id, toEndpoint: unknown, description: 'Different unique memo' });
+  assert.equal(describeRelationship(selected, other), null);
+  const recorded = { ...unknown, id: 'recorded-account', kind: 'external-account', evidence: { kind: 'source-account-identifier' } };
+  const denied = { ...selected, toEndpointId: recorded.id, toEndpoint: recorded, toMembership: { status: 'dismissed', isEffective: false, endpointId: recorded.id } };
+  assert.equal(describeRelationship(denied, { ...other, toEndpointId: recorded.id, toEndpoint: recorded }), null);
+});
+
+test('only direct confirmation of both account memberships upgrades their shared association', () => {
+  const node = { id: 'hint-account', kind: 'merchant-hint', owned: false, evidence: { kind: 'merchant-hint' } };
+  const membership = { status: 'confirmed', provenance: 'owner', endpointId: node.id, isEffective: true };
+  const selected = transaction({ toEndpointId: node.id, toEndpoint: node, toMembership: membership });
+  const other = transaction({ id: 'other', toEndpointId: node.id, toEndpoint: node });
+  assert.equal(describeRelationship(selected, other).certainty, 'text-hint-suggestion');
+  const result = describeRelationship(selected, { ...other, toMembership: membership });
+  assert.equal(result.certainty, 'owner-membership-match');
+  assert.ok(result.reasons.includes('Same external account membership confirmed by you'));
+  const reassigned = transaction({ description: 'First unique memo', counterpartyId: 'old-source-party', toEndpointId: node.id, toEndpoint: node, toMembership: membership });
+  const oldParty = transaction({ id: 'old-party', description: 'Different unique memo', counterpartyId: 'old-source-party', toEndpointId: 'old-source-account' });
+  assert.equal(describeRelationship(reassigned, oldParty), null);
+});
+
 test('refund mirrors, another date, another currency and invalid dates are not duplicate evidence', () => {
   const selected = transaction({ counterpartyId: 'party-cafe' });
   const candidates = [

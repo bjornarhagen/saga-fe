@@ -37,12 +37,16 @@ function merchantDescription(transaction) {
 
 function endpoint(transaction, side) {
   const object = transaction[`${side}Endpoint`] || {};
+  const membership = transaction[`${side}Membership`];
+  if (membership?.status === 'dismissed' && membership.isEffective === false) {
+    return { keys: new Set(), endpointId: null, accountId: null, counterpartyId: null, external: false, quality: 'unknown', skipSourceParty: true };
+  }
   const endpointId = identity(transaction[`${side}EndpointId`]) || identity(object.id) || identity(transaction[`${side}EndpointKey`]);
   let accountId = identity(transaction[`${side}AccountId`]) || identity(object.accountId);
   let counterpartyId = identity(object.counterpartyId);
   const ownerSide = transaction.amount < 0 ? 'from' : transaction.amount > 0 ? 'to' : null;
   if (!accountId && side === ownerSide) accountId = identity(transaction.accountId);
-  if (!accountId && side !== ownerSide && ownerSide) counterpartyId ||= identity(transaction.counterpartyId);
+  if (!accountId && side !== ownerSide && ownerSide && membership?.status !== 'confirmed') counterpartyId ||= identity(transaction.counterpartyId);
   const keys = new Set();
   if (endpointId) keys.add(`endpoint:${endpointId}`);
   if (accountId) keys.add(`account:${accountId}`);
@@ -50,14 +54,55 @@ function endpoint(transaction, side) {
   // A shared owned account alone would relate every purchase paid from it.
   // Only external endpoint identities count as a shared payment party.
   const external = !accountId && object.owned !== true;
-  return { keys, endpointId, accountId, counterpartyId, external };
+  const quality = !external ? 'owned'
+    : membership?.status === 'confirmed' && membership.isEffective !== false ? 'confirmed'
+    : object.kind === 'counterparty' && object.evidence ? 'recorded'
+    : object.evidence?.kind === 'merchant-hint' || object.kind === 'merchant-hint' ? 'hint'
+    : object.evidence?.kind === 'unknown' || object.kind === 'unknown-endpoint' ? 'unknown'
+    : ['source-account-identifier', 'provider-account-identifier'].includes(object.evidence?.kind) ? 'recorded' : 'legacy';
+  // Placeholder IDs are stable URLs, not evidence that unknown payments share
+  // a real account. A dismissed source association cannot infer one either.
+  if (quality === 'unknown') { keys.clear(); counterpartyId = null; }
+  return { keys, endpointId: quality === 'unknown' ? null : endpointId, accountId, counterpartyId, external, quality,
+    skipSourceParty: quality === 'unknown' || membership?.status === 'confirmed' };
 }
 
 function profile(transaction) {
   const from = endpoint(transaction, 'from'), to = endpoint(transaction, 'to');
-  const counterparties = new Set([identity(transaction.counterpartyId), from.counterpartyId, to.counterpartyId].filter(Boolean));
-  const peers = new Set([...(from.external ? from.keys : []), ...(to.external ? to.keys : [])]);
+  const counterparties = new Map(), peers = new Map();
+  for (const node of [from, to]) {
+    if (node.counterpartyId) counterparties.set(node.counterpartyId, node.quality);
+    if (node.external) for (const key of node.keys) peers.set(key, node.quality);
+  }
+  const partySide = transaction.amount < 0 ? to : transaction.amount > 0 ? from : null;
+  const party = identity(transaction.counterpartyId);
+  if (party && !partySide?.skipSourceParty) counterparties.set(party, partySide?.quality || 'legacy');
   return { from, to, counterparties, peers, description: merchantDescription(transaction) };
+}
+
+function combineQuality(left, right) {
+  if (left === 'unknown' || right === 'unknown') return 'unknown';
+  if (left === 'hint' || right === 'hint') return 'hint';
+  if (left === 'confirmed' && right === 'confirmed') return 'confirmed';
+  if ([left, right].some(value => value === 'recorded' || value === 'confirmed')) return 'recorded';
+  return 'legacy';
+}
+function sharedQuality(left, right) {
+  const rank = { hint: 1, legacy: 2, recorded: 3, confirmed: 4 };
+  let result = null;
+  for (const [key, value] of left) if (right.has(key)) {
+    const quality = combineQuality(value, right.get(key));
+    if (quality !== 'unknown' && (!result || rank[quality] > rank[result])) result = quality;
+  }
+  return result;
+}
+function routeQuality(left, right, reverse = false) {
+  const pairs = [[left.from, reverse ? right.to : right.from], [left.to, reverse ? right.from : right.to]];
+  const external = pairs.filter(([a, b]) => a.external || b.external).map(([a, b]) => combineQuality(a.quality, b.quality));
+  if (external.includes('hint')) return 'hint';
+  if (external.length && external.every(value => value === 'confirmed')) return 'confirmed';
+  if (external.includes('recorded')) return 'recorded';
+  return 'legacy';
 }
 
 function sameSide(left, right) {
@@ -75,8 +120,8 @@ function validDate(value) {
 }
 
 function compare(selected, transaction, left, right) {
-  const sameCounterparty = intersects(left.counterparties, right.counterparties);
-  const sameExternal = intersects(left.peers, right.peers);
+  const partyQuality = sharedQuality(left.counterparties, right.counterparties), peerQuality = sharedQuality(left.peers, right.peers);
+  const sameCounterparty = !!partyQuality, sameExternal = !!peerQuality;
   const sameRoute = sameSide(left.from, right.from) && sameSide(left.to, right.to);
   const reverseRoute = !sameRoute && sameSide(left.from, right.to) && sameSide(left.to, right.from);
   const sameDescription = !!left.description && left.description === right.description;
@@ -90,19 +135,22 @@ function compare(selected, transaction, left, right) {
   // a known contradictory route must never be dismissed as bank noise.
   const possibleDuplicate = sameFinancialValue && sameDate && (sameRoute || (sameDescription && !conflictingRoute));
   const reasons = [];
-  if (sameCounterparty) reasons.push('Same counterparty identity');
-  else if (sameExternal) reasons.push('Same external sender or receiver');
-  if (sameRoute) reasons.push('Same sender and receiver');
-  else if (reverseRoute) reasons.push('Same two endpoints in opposite directions');
+  const routeEvidence = routeQuality(left, right, reverseRoute);
+  const hintReason = 'Same merchant text hint; account membership is unconfirmed';
+  if (sameCounterparty) reasons.push(partyQuality === 'hint' ? hintReason : partyQuality === 'recorded' ? 'Same recorded counterparty identifier' : partyQuality === 'confirmed' ? 'Same external account membership confirmed by you' : 'Same counterparty identity');
+  else if (sameExternal) reasons.push(peerQuality === 'hint' ? hintReason : peerQuality === 'recorded' ? 'Same recorded external account identifier' : peerQuality === 'confirmed' ? 'Same external account membership confirmed by you' : 'Same external sender or receiver');
+  if (sameRoute) reasons.push(routeEvidence === 'hint' ? 'Same sender/receiver text-hint route; account membership is unconfirmed' : routeEvidence === 'recorded' ? 'Same recorded sender and receiver' : routeEvidence === 'confirmed' ? 'Same sender and receiver with confirmed external account membership' : 'Same sender and receiver');
+  else if (reverseRoute) reasons.push(routeEvidence === 'hint' ? 'Same sender/receiver text hints in opposite directions' : routeEvidence === 'recorded' ? 'Same recorded endpoints in opposite directions' : routeEvidence === 'confirmed' ? 'Same confirmed external account in opposite directions' : 'Same two endpoints in opposite directions');
   if (sameDescription) reasons.push('Same normalized merchant description');
   if (sameDescription && conflictingRoute && !sameRoute && !reverseRoute) reasons.push('Account route differs');
   if (possibleDuplicate) reasons.push('Same signed amount and currency', 'Same booking date');
 
-  const relation = sameCounterparty || sameExternal ? 'counterparty' : sameRoute || reverseRoute ? 'route' : 'description';
-  const rank = sameCounterparty ? 95 : sameExternal ? 92 : sameRoute ? 90 : reverseRoute ? 85 : 55;
+  const quality = partyQuality || peerQuality || (sameRoute || reverseRoute ? routeEvidence : null);
+  const relation = quality === 'hint' ? 'description' : sameCounterparty || sameExternal ? 'counterparty' : sameRoute || reverseRoute ? 'route' : 'description';
+  const rank = quality === 'hint' ? 55 : sameCounterparty ? 95 : sameExternal ? 92 : sameRoute ? 90 : reverseRoute ? 85 : 55;
   return {
     transaction, reasons, relation, possibleDuplicate,
-    certainty: relation === 'description' ? 'description-suggestion' : 'identity-match',
+    certainty: quality === 'hint' ? 'text-hint-suggestion' : quality === 'recorded' ? 'recorded-source-match' : quality === 'confirmed' ? 'owner-membership-match' : relation === 'description' ? 'description-suggestion' : 'identity-match',
     strength: rank + (possibleDuplicate ? 5 : 0),
   };
 }

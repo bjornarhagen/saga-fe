@@ -73,21 +73,21 @@ test('saved relations preserve all financial tables and survive corrections, rei
   assert.equal(store.getTransactions().transactions.length, 3);
 });
 
-test('schema one migrates atomically to two without changing saved financial data or import identity', t => {
+test('schema one migrates atomically to the current version without changing saved financial data or import identity', t => {
   const path = join(temporary(t), 'schema-one.sqlite');
   let store = createStore(path); const { input, ids } = fixture(store);
   store.saveSettings({ fields: { cash: '1.05', 'balance-date': '2026-01-01' } });
   store.saveOverrides({ [ids[0]]: { category: 'Owner category', excludeForecast: true } });
-  const original = store.exportLedger().tables; delete original.transaction_relations;
+  const original = store.exportLedger().tables; delete original.transaction_relations; delete original.transaction_account_memberships; delete original.external_endpoint_refs;
   store.close();
   // An actual version-one schema: every original table and saved record,
   // with neither the new table nor its schema version present.
   const legacy = new DatabaseSync(path);
-  legacy.exec('DROP TABLE transaction_relations; PRAGMA user_version=1');
+  legacy.exec('DROP TABLE transaction_account_memberships; DROP TABLE external_endpoint_refs; DROP TABLE transaction_relations; PRAGMA user_version=1');
   legacy.close();
   store = createStore(path);
   const migrated = store.exportLedger();
-  assert.equal(migrated.databaseSchemaVersion, 2);
+  assert.equal(migrated.databaseSchemaVersion, DATABASE_SCHEMA_VERSION);
   assert.deepEqual(migrated.tables.transaction_relations, []);
   for (const table of Object.keys(original)) assert.deepEqual(migrated.tables[table], original[table]);
   assert.equal(store.ingest(input).duplicate, true);
@@ -132,8 +132,8 @@ test('newer unsupported schemas are refused without changing their version or co
 test('a failed schema-two migration rolls back its new table and keeps version-one data intact', t => {
   const path = join(temporary(t), 'migration-failure.sqlite');
   const seed = createStore(path); fixture(seed);
-  const original = seed.exportLedger().tables; delete original.transaction_relations; seed.close();
-  const legacy = new DatabaseSync(path); legacy.exec('DROP TABLE transaction_relations; PRAGMA user_version=1'); legacy.close();
+  const original = seed.exportLedger().tables; delete original.transaction_relations; delete original.transaction_account_memberships; delete original.external_endpoint_refs; seed.close();
+  const legacy = new DatabaseSync(path); legacy.exec('DROP TABLE transaction_account_memberships; DROP TABLE external_endpoint_refs; DROP TABLE transaction_relations; PRAGMA user_version=1'); legacy.close();
   const originalExec = DatabaseSync.prototype.exec;
   try {
     DatabaseSync.prototype.exec = function (sql) {
@@ -148,22 +148,22 @@ test('a failed schema-two migration rolls back its new table and keeps version-o
   assert.equal(check.prepare("SELECT COUNT(*) AS count FROM sqlite_schema WHERE name='transaction_relations'").get().count, 0);
   for (const table of Object.keys(original)) assert.deepEqual(check.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all(), original[table]);
   const recovered = createStore(path); t.after(() => recovered.close());
-  assert.equal(recovered.exportLedger().databaseSchemaVersion, 2, 'a later successful reopen must complete the migration');
+  assert.equal(recovered.exportLedger().databaseSchemaVersion, DATABASE_SCHEMA_VERSION, 'a later successful reopen must complete the migration');
 });
 
 test('concurrent connections can open and migrate one version-one database without losing financial state', async t => {
   const { Worker } = await import('node:worker_threads');
   const path = join(temporary(t), 'concurrent-migration.sqlite');
   const seed = createStore(path); const { ids } = fixture(seed);
-  const original = seed.exportLedger().tables; delete original.transaction_relations; seed.close();
-  const legacy = new DatabaseSync(path); legacy.exec('DROP TABLE transaction_relations; PRAGMA user_version=1'); legacy.close();
+  const original = seed.exportLedger().tables; delete original.transaction_relations; delete original.transaction_account_memberships; delete original.external_endpoint_refs; seed.close();
+  const legacy = new DatabaseSync(path); legacy.exec('DROP TABLE transaction_account_memberships; DROP TABLE external_endpoint_refs; DROP TABLE transaction_relations; PRAGMA user_version=1'); legacy.close();
   const source = `const {parentPort,workerData}=require('node:worker_threads'); import(workerData.module).then(({createStore})=>{ const store=createStore(workerData.path); try { parentPort.postMessage({version:store.exportLedger().databaseSchemaVersion,decisions:store.getRelations().decisions.length}); } finally {store.close();} });`;
   const run = () => new Promise((resolve, reject) => {
     const worker = new Worker(source, { eval: true, workerData: { path, module: new URL('../src/server/database.js', import.meta.url).href } });
     t.after(() => worker.terminate());
     worker.once('message', resolve); worker.once('error', reject); worker.once('exit', code => { if (code !== 0) reject(new Error('Synthetic migration worker failed.')); });
   });
-  assert.deepEqual(await Promise.all([run(), run()]), [{ version: 2, decisions: 0 }, { version: 2, decisions: 0 }]);
+  assert.deepEqual(await Promise.all([run(), run()]), [{ version: DATABASE_SCHEMA_VERSION, decisions: 0 }, { version: DATABASE_SCHEMA_VERSION, decisions: 0 }]);
   const final = createStore(path); t.after(() => final.close());
   const migrated = final.exportLedger().tables;
   for (const table of Object.keys(original)) assert.deepEqual(migrated[table], original[table]);
@@ -173,9 +173,9 @@ test('concurrent connections can open and migrate one version-one database witho
 test('an unexpected relation-table collision on schema one is refused without advancing or overwriting state', t => {
   const path = join(temporary(t), 'schema-collision.sqlite');
   const seed = createStore(path); fixture(seed);
-  const original = seed.exportLedger().tables; delete original.transaction_relations; seed.close();
+  const original = seed.exportLedger().tables; delete original.transaction_relations; delete original.transaction_account_memberships; delete original.external_endpoint_refs; seed.close();
   const legacy = new DatabaseSync(path);
-  legacy.exec("DROP TABLE transaction_relations; CREATE TABLE transaction_relations(unexpected TEXT); INSERT INTO transaction_relations VALUES('synthetic-preserved'); PRAGMA user_version=1");
+  legacy.exec("DROP TABLE transaction_account_memberships; DROP TABLE external_endpoint_refs; DROP TABLE transaction_relations; CREATE TABLE transaction_relations(unexpected TEXT); INSERT INTO transaction_relations VALUES('synthetic-preserved'); PRAGMA user_version=1");
   legacy.close();
   assert.throws(() => createStore(path), /already exists/);
   const check = new DatabaseSync(path, { readOnly: true }); t.after(() => check.close());

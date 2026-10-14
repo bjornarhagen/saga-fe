@@ -369,6 +369,19 @@ input[readonly] { color: var(--fg-dim); background: var(--bg-2); }
 .relation-state { display: inline-block; font-family: var(--font-mono); margin-block: var(--s-2); }
 .relation-state.confirmed { color: var(--positive-text); }
 .relation-state.dismissed { color: var(--fg-dim); }
+.membership-card, .endpoint-category-card { margin-bottom: var(--s-5); }
+.membership-side { min-width: 0; }
+.membership-side h3 { font-family: var(--font-mono); font-size: 13px; margin-bottom: var(--s-4); }
+.membership-side label { margin-top: var(--s-5); }
+.membership-assign { margin-top: var(--s-3); }
+.membership-state { font-family: var(--font-mono); font-size: 11px; line-height: 1.8; color: var(--fg-dim); }
+.membership-state.confirmed { color: var(--positive-text); }
+.membership-state.dismissed { color: var(--fg-dim); }
+.account-membership-row { margin-top: var(--s-3); }
+.endpoint-category-groups { display: grid; gap: var(--s-2); }
+.endpoint-category-button { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: var(--s-2); text-align: left; font-family: var(--font-mono); font-size: 11px; padding: var(--s-4); border: 1px solid var(--border); background: var(--bg-1); color: var(--fg); }
+.endpoint-category-button[aria-pressed="true"] { border-color: var(--accent-dim); color: var(--link); }
+.endpoint-category-button small { color: var(--fg-dim); font-size: 10px; }
 .endpoint-summary .metric-value { font-size: clamp(18px, 2.8vw, 30px); overflow-wrap: anywhere; }
 .detail-identifiers { min-width: 0; }
 .detail-identifiers code { font-family: var(--font-mono); font-size: 11px; overflow-wrap: anywhere; }

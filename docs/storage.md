@@ -33,6 +33,21 @@ amounts, classifications, account balances, or forecast calculations.
 An application that supports only schema version 1 refuses a version 2 ledger;
 rollback requires a compatible application or a matching pre-migration snapshot.
 
+Schema version 3 adds `external_endpoint_refs` and
+`transaction_account_memberships`. A durable reference is materialized when an
+owner reviews an external account or merchant. A membership records transaction,
+side (`from` or `to`), endpoint, decision, and timestamps. A partial unique index
+allows one confirmed endpoint per side. Confirming another endpoint dismisses
+the earlier confirmed one in the same transaction. Reset clears only the selected
+decision. Existing payment-pair decisions are preserved without reinterpretation.
+
+Source endpoints and effective owner assignments are returned separately.
+Dismissals and confirmed alternate assignments remove an old source hint from
+active account totals while preserving it in review views. An account combined
+with the transaction's effective category supplies the purpose grouping; there
+is no second purpose-group store. Account review never changes amounts, source
+rows, import identities, balance accounts, or forecast classifications.
+
 Balances are dated facts, not sums reconstructed from an unknown opening balance.
 Each account has one forecast role: `available`, `reserve` or `excluded`. Unknown
 balances are null, distinct from zero. A combined account-derived forecast is

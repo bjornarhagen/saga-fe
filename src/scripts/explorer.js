@@ -1,22 +1,25 @@
 import { applyRelationshipDecisions } from '../lib/relationships.js';
 import { routeHash } from './routes.js';
+import { createMembershipController } from './memberships.js';
 
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const perPage = 40;
 const paymentsLabel = count => `${count} payment${count === 1 ? '' : 's'}`;
 const kinds = { expense: 'Spending', income: 'Money in', saving: 'Savings', transfer: 'Transfer' };
-const labelSources = { 'ledger-account': 'Saved account name', 'source-label': 'Name supplied by the import', 'masked-identifier': 'Masked source identifier; name unknown', 'counterparty-metadata': 'Imported counterparty name' };
+const labelSources = { 'ledger-account': 'Saved account name', 'source-label': 'Name supplied by the import', 'masked-identifier': 'Masked source identifier; name unknown', 'counterparty-metadata': 'Imported counterparty name', 'source-text': 'Merchant text hint from the import', 'provider-text': 'Merchant text hint from the import' };
+const endpointType = node => node.owned ? 'My account' : node.kind === 'counterparty' ? 'External party' : node.evidence?.kind === 'merchant-hint' || node.kind === 'merchant-hint' ? 'Merchant text hint' : node.evidence?.kind === 'unknown' ? 'Unknown external identity' : 'External account';
 const $ = id => document.getElementById(id);
 const definition = fields => `<dl>${fields.map(([label, value]) => `<dt>${esc(label)}</dt><dd>${value}</dd>`).join('')}</dl>`;
 const safeValue = value => esc(typeof value === 'object' && value !== null ? JSON.stringify(value) : value ?? 'Unknown');
 const link = (view, id, name) => `<a class="ledger-link" href="${esc(routeHash({ view, id }))}">${esc(name)}</a>`;
 
-export function createExplorer({ api, exactMoney, dateText, getTransactions, editTransaction, notify = () => {} }) {
+export function createExplorer({ api, exactMoney, dateText, getTransactions, editTransaction, reloadLedger, notify = () => {} }) {
   let endpoints = [], endpointById = new Map(), route = null, requestGeneration = 0;
   let directoryPage = 0, endpointPage = 0, relatedPage = 0, relatedMode = 'related';
   const detailStates = new Map();
   let accountDetail = null, transactionDetail = null, decisions = [];
   let decisionVersion = 0, decisionsAvailable = false, decisionBusy = false;
+  const memberships = createMembershipController({ api, reloadLedger, notify, getRouteKey: () => routeHash(route || {}) });
   const endpoint = id => endpointById.get(id);
   const endpointLink = (node, unknown = 'Unknown') => node ? link('account', node.id, node.name) : `<span class="muted">${unknown}</span>`;
   const rowRoute = row => `${endpointLink(row.fromEndpoint || endpoint(row.fromEndpointId), 'Unknown sender')} <span aria-hidden="true">→</span> ${endpointLink(row.toEndpoint || endpoint(row.toEndpointId), 'Unknown receiver')}`;
@@ -34,7 +37,7 @@ export function createExplorer({ api, exactMoney, dateText, getTransactions, edi
     const rows = endpoints.filter(node => (scope === 'all' || (scope === 'owned' ? node.owned : !node.owned)) && (!query || `${node.name} ${node.counterpartyName || ''}`.toLocaleLowerCase().includes(query)));
     const page = paginate(rows, directoryPage, 'endpoint-directory'); directoryPage = page.page;
     $('endpoint-directory-count').textContent = `${rows.length} identities`;
-    $('endpoint-directory-list').innerHTML = page.shown.length ? page.shown.map(node => `<div class="endpoint-directory-item"><div class="endpoint-name">${endpointLink(node)}<small>${node.owned ? 'My account' : node.kind === 'counterparty' ? 'External party' : 'External account'}${node.counterpartyName && node.counterpartyName !== node.name ? ` · ${esc(node.counterpartyName)}` : ''}</small></div><div class="endpoint-meta">${paymentsLabel(node.summary.payments)} · ${node.summary.transactionRows} entries<small>In ${exactMoney(node.summary.incoming)} · Out ${exactMoney(node.summary.outgoing)}</small></div></div>`).join('') : '<p class="no-results">No saved identities match these filters.</p>';
+    $('endpoint-directory-list').innerHTML = page.shown.length ? page.shown.map(node => `<div class="endpoint-directory-item"><div class="endpoint-name">${endpointLink(node)}<small>${esc(endpointType(node))}${node.counterpartyName && node.counterpartyName !== node.name ? ` · ${esc(node.counterpartyName)}` : ''}</small></div><div class="endpoint-meta">${paymentsLabel(node.summary.payments)} · ${node.summary.transactionRows} entries<small>In ${exactMoney(node.summary.incoming)} · Out ${exactMoney(node.summary.outgoing)}</small></div></div>`).join('') : '<p class="no-results">No saved identities match these filters.</p>';
   }
   function paymentRow(row, note = '', flow = false, actions = '') {
     const amount = flow ? row.flowAmount : row.amount;
@@ -74,7 +77,7 @@ export function createExplorer({ api, exactMoney, dateText, getTransactions, edi
     $('transaction-detail-status').textContent = 'One saved ledger entry · connections use all saved history.';
     $('edit-detail-transaction').disabled = false;
     const classification = value => `${esc(kinds[value.kind] || value.kind)} · ${esc(value.category)}${value.subcategory ? ` / ${esc(value.subcategory)}` : ''}`;
-    const endpointInfo = (node, side) => node ? `${endpointLink(node)}<small>${node.owned ? 'My account' : 'External sender/receiver'} · ${esc(labelSources[node.labelSource] || 'Imported identity')}</small>${node.counterpartyName && node.counterpartyName !== node.name ? `<small>Counterparty label: ${esc(node.counterpartyName)}</small>` : ''}` : `<span class="muted">Unknown ${side}; no identity saved in the source.</span>`;
+    const endpointInfo = (node, side) => node ? `${endpointLink(node)}<small>${esc(endpointType(node))} · ${esc(labelSources[node.labelSource] || 'Imported identity')}</small>${node.evidence?.reason && !node.owned ? `<small>${esc(node.evidence.reason)}</small>` : ''}` : `<span class="muted">Unknown ${side}; no current account assignment.</span>`;
     $('transaction-detail-body').innerHTML = `<div class="detail-grid"><article class="card detail-info-card"><div class="card-heading"><h2>Payment</h2><span class="badge ${esc(row.kind)}">${esc(kinds[row.kind] || row.kind)}</span></div>${definition([
       ['Booked amount', `<strong class="detail-amount">${signed(row.amount)}</strong> · ${esc(row.currency || 'NOK')}`],
       ['Booking date', esc(dateText(row.date))], ['Sender', endpointInfo(from, 'sender')], ['Receiver', endpointInfo(to, 'receiver')],
@@ -87,62 +90,90 @@ export function createExplorer({ api, exactMoney, dateText, getTransactions, edi
     ])}<p class="input-note">Changing the classification keeps the imported payment and its identities.</p></article></div>
     <article class="card detail-info-card"><div class="card-heading"><h2>Import history</h2></div>${provenance.length ? definition(provenance.map(item => [item.importedAt?.slice(0, 10) || 'Import', `${esc(item.adapter)} · ${esc(item.filename || 'Unnamed input')} · row ${esc(item.rowNumber ?? 'unknown')}`])) : '<p class="input-note">No source row history is saved for this entry.</p>'}
     <details class="source-fields"><summary>Original source fields from the latest import</summary>${Object.keys(sourceFields).length ? definition(Object.entries(sourceFields).map(([key, value]) => [key, safeValue(value)])) : '<p class="input-note">No original fields are available.</p>'}</details></article>`;
+    $('transaction-membership-body').innerHTML = memberships.transactionPanel(transactionDetail, endpointLink);
     renderConnections();
+  }
+  function membershipMatches(row, status) {
+    const states = row.memberships || [{ status: row.membershipStatus || (accountDetail.endpoint.owned ? 'owned' : 'suggested'), isEffective: true }];
+    return status === 'all' || states.some(member => status === 'active' ? member.status !== 'dismissed' && member.isEffective !== false : status === 'confirmed' ? ['confirmed', 'owned'].includes(member.status) : member.status === status);
+  }
+  function renderAccountGroups() {
+    if (!accountDetail) return;
+    const status = $('endpoint-status').value;
+    const categories = accountDetail.categorySummaries?.[status] || [];
+    const selected = $('endpoint-category').value;
+    $('endpoint-category').innerHTML = '<option value="">All categories</option>' + categories.map(item => `<option value="${esc(item.category)}">${esc(item.category)}</option>`).join('') + (selected && !categories.some(item => item.category === selected) ? `<option value="${esc(selected)}">${esc(selected)} · 0 payments</option>` : '');
+    $('endpoint-category').value = selected;
+    const category = $('endpoint-category').value;
+    const summary = (category ? categories.find(item => item.category === category) : accountDetail.summaries?.[status] || accountDetail.summary) || { incoming: 0, outgoing: 0, net: 0, payments: 0, transactionRows: 0 };
+    const scope = `${accountDetail.endpoint.owned ? 'Recorded account' : $('endpoint-status').selectedOptions[0].textContent}${category ? ' · ' + category : ''}`;
+    $('account-detail-summary').innerHTML = [[accountDetail.endpoint.owned ? 'Money in' : 'Paid to this recipient', summary.incoming], [accountDetail.endpoint.owned ? 'Money out' : 'Received from this sender', summary.outgoing], [accountDetail.endpoint.owned ? 'Net movement' : 'Net paid', summary.net]].map(([label, amount]) => `<article class="metric"><div class="metric-label">${label}</div><div class="metric-value">${exactMoney(amount)}</div><div class="metric-note">${esc(scope)} · all saved dates</div></article>`).join('');
+    $('endpoint-category-groups').innerHTML = categories.length ? categories.map(item => `<button type="button" class="endpoint-category-button" data-endpoint-category="${esc(item.category)}" aria-pressed="${item.category === category}"><span>${esc(item.category)} <small>${paymentsLabel(item.payments)}</small></span><span>${accountDetail.endpoint.owned ? 'In' : 'Paid'} ${exactMoney(item.incoming)} · ${accountDetail.endpoint.owned ? 'Out' : 'Received'} ${exactMoney(item.outgoing)}</span></button>`).join('') : '<p class="no-results">No category groups for this confirmation status.</p>';
+    $('endpoint-scope-note').textContent = `${paymentsLabel(summary.payments)} · ${summary.transactionRows} ledger entries. Totals follow account confirmation and category across all saved dates. Search and direction filter the history below. ${(accountDetail.notes || []).join(' ')}`;
   }
   function renderEndpointRows() {
     if (!accountDetail) return;
     const query = $('endpoint-search').value.trim().toLocaleLowerCase(), direction = $('endpoint-direction').value;
-    const rows = accountDetail.transactions.filter(row => (direction === 'all' || direction === row.flowDirection) && (!query || `${row.description} ${row.category} ${row.subcategory} ${row.fromEndpoint?.name || ''} ${row.toEndpoint?.name || ''}`.toLocaleLowerCase().includes(query))).sort((a, b) => b.date.localeCompare(a.date) || a.id.localeCompare(b.id));
+    const status = $('endpoint-status').value, category = $('endpoint-category').value;
+    const rows = accountDetail.transactions.filter(row => membershipMatches(row, status) && (!category || (row.flowCategory || row.category) === category) && (direction === 'all' || direction === row.flowDirection) && (!query || `${row.description} ${row.category} ${row.subcategory} ${row.fromEndpoint?.name || ''} ${row.toEndpoint?.name || ''}`.toLocaleLowerCase().includes(query))).sort((a, b) => b.date.localeCompare(a.date) || a.id.localeCompare(b.id));
     const page = paginate(rows, endpointPage, 'endpoint'); endpointPage = page.page;
     $('endpoint-count').textContent = `${rows.length} matching ledger entries`;
-    $('endpoint-transactions').innerHTML = page.shown.length ? page.shown.map(row => paymentRow(row, row.pairedRows ? 'Paired internal transfer leg · totals count the two entries once' : '', true)).join('') : '<tr><td colspan="4" class="no-results">No saved entries match these filters.</td></tr>';
+    $('endpoint-transactions').innerHTML = page.shown.length ? page.shown.map(row => paymentRow(row, row.pairedRows ? 'Paired internal transfer leg · totals count the two entries once' : '', true, memberships.accountRow(row, accountDetail.endpoint))).join('') : '<tr><td colspan="4" class="no-results">No saved entries match these filters.</td></tr>';
   }
   function renderEndpoint() {
-    const { endpoint: node, summary, notes = [] } = accountDetail;
+    const { endpoint: node, summary, coverage = {} } = accountDetail;
     $('account-detail-title').textContent = node.name;
-    $('account-detail-status').textContent = `${node.owned ? 'My account' : node.kind === 'counterparty' ? 'External party' : 'External account'} · ${labelSources[node.labelSource] || 'Imported identity'}`;
-    $('account-detail-summary').innerHTML = [['Money in', summary.incoming], ['Money out', summary.outgoing], ['Net movement', summary.net]].map(([label, amount]) => `<article class="metric"><div class="metric-label">${label}</div><div class="metric-value">${exactMoney(amount)}</div><div class="metric-note">All saved history · NOK</div></article>`).join('');
+    $('account-detail-status').textContent = `${endpointType(node)} · ${node.evidence?.reason || labelSources[node.labelSource] || 'Imported identity'}`;
+    $('endpoint-status-label').hidden = node.owned;
     $('account-detail-body').innerHTML = definition([
       ['Identity', esc(node.name)], ['Name source', esc(labelSources[node.labelSource] || 'Imported identity')],
+      ...(node.evidence ? [['Source evidence', esc(node.evidence.reason)]] : []),
       ...(node.counterpartyName && node.counterpartyName !== node.name ? [['Counterparty label', esc(node.counterpartyName)]] : []),
       ...(node.owned ? [['Forecast role', esc({ available: 'Available cash', reserve: 'Savings reserve', excluded: 'Excluded' }[node.role] || 'Unknown')], ['Saved balance', node.balance == null ? 'Not set' : `${exactMoney(node.balance)} as of ${esc(node.balanceDate)}`], ['Manage balance', '<a class="ledger-link" href="#accounts">Edit in Accounts →</a>']] : []),
-      ['History', summary.firstDate ? `${esc(dateText(summary.firstDate))} – ${esc(dateText(summary.lastDate))}` : 'No transactions'],
-      ['Payments', `${paymentsLabel(summary.payments)} · ${summary.transactionRows} ledger entries`]
+      ['History', coverage.firstDate || summary.firstDate ? `${esc(dateText(coverage.firstDate || summary.firstDate))} – ${esc(dateText(coverage.lastDate || summary.lastDate))}` : 'No transactions'],
+      ['Active payments', `${paymentsLabel(summary.payments)} · ${summary.transactionRows} ledger entries`]
     ]) + (node.balanceHistory?.length ? `<details class="source-fields"><summary>Saved balance history (${node.balanceHistory.length})</summary>${definition(node.balanceHistory.map(snapshot => [snapshot.date, snapshot.amount == null ? 'Not set' : exactMoney(snapshot.amount)]))}</details>` : '');
     $('account-detail-identifiers').innerHTML = node.identifiers?.length ? definition(node.identifiers.map(item => [item.adapter || 'Imported source', `<code>${esc(item.value)}</code>`])) : '<p class="input-note">No source identifier is saved. This identity is tracked by its private ledger ID.</p>';
-    $('endpoint-scope-note').textContent = `${paymentsLabel(summary.payments)} across all saved history. ${notes.join(' ')} Amounts in this table follow the direction for this account; the signed source entry is also shown when it differs.`;
+    renderAccountGroups();
     renderEndpointRows();
   }
   async function openRoute(next, { focus = false } = {}) {
     const changed = routeHash(route || {}) !== routeHash(next);
     if (changed && route?.view === 'transaction') detailStates.set(routeHash(route), { relatedPage, relatedMode, status: $('related-status').value });
-    if (changed && route?.view === 'account') detailStates.set(routeHash(route), { endpointPage, search: $('endpoint-search').value, direction: $('endpoint-direction').value });
+    if (changed && route?.view === 'account') detailStates.set(routeHash(route), { endpointPage, search: $('endpoint-search').value, direction: $('endpoint-direction').value, category: $('endpoint-category').value, status: $('endpoint-status').value });
     route = next; const generation = ++requestGeneration;
-    if (!['account', 'transaction'].includes(next.view)) return;
+    if (!['account', 'transaction'].includes(next.view)) return true;
     const transaction = next.view === 'transaction', prefix = transaction ? 'transaction-detail' : 'account-detail';
     if (changed) {
       const remembered = detailStates.get(routeHash(next));
       if (transaction) { relatedPage = remembered?.relatedPage || 0; relatedMode = remembered?.relatedMode || 'related'; $('related-status').value = remembered?.status || 'active'; if (decisionsAvailable && !decisionBusy) $('relation-save-status').textContent = ''; }
-      else { endpointPage = remembered?.endpointPage || 0; $('endpoint-search').value = remembered?.search || ''; $('endpoint-direction').value = remembered?.direction || 'all'; }
+      else { endpointPage = remembered?.endpointPage || 0; $('endpoint-search').value = remembered?.search || ''; $('endpoint-direction').value = remembered?.direction || 'all'; $('endpoint-status').value = remembered?.status || 'active'; $('endpoint-category').innerHTML = '<option value="">All categories</option>' + (remembered?.category ? `<option value="${esc(remembered.category)}">${esc(remembered.category)}</option>` : ''); $('endpoint-category').value = remembered?.category || ''; }
+      memberships.clearMessage();
     }
     $(prefix + '-status').textContent = 'Reading saved details…';
     $(prefix + '-title').textContent = transaction ? 'Transaction details.' : 'Account details.';
     $(prefix + '-body').innerHTML = '';
-    if (transaction) { transactionDetail = null; $('edit-detail-transaction').disabled = true; renderConnections(); }
-    else { accountDetail = null; $('account-detail-summary').innerHTML = ''; $('account-detail-identifiers').innerHTML = ''; $('endpoint-transactions').innerHTML = ''; $('endpoint-count').textContent = ''; $('endpoint-scope-note').textContent = ''; }
+    if (transaction) { transactionDetail = null; $('transaction-membership-body').innerHTML = ''; $('edit-detail-transaction').disabled = true; renderConnections(); }
+    else { accountDetail = null; $('account-detail-summary').innerHTML = ''; $('account-detail-identifiers').innerHTML = ''; $('endpoint-category-groups').innerHTML = ''; $('endpoint-transactions').innerHTML = ''; $('endpoint-count').textContent = ''; $('endpoint-scope-note').textContent = ''; }
+    const membershipReadVersion = memberships.version();
     try {
       const result = await api(`/api/${transaction ? 'transactions' : 'endpoints'}/${encodeURIComponent(next.id)}`);
       if (generation !== requestGeneration) return;
+      if (!memberships.acceptRead(membershipReadVersion)) return openRoute(next, { focus });
       if (transaction) { transactionDetail = result; renderTransaction(); }
       else { accountDetail = result; renderEndpoint(); }
     } catch {
       if (generation !== requestGeneration) return;
       $(prefix + '-status').textContent = 'These saved details could not be found or loaded. Return to the list and refresh the ledger.';
+      return false;
     }
     if (focus && generation === requestGeneration) $(prefix + '-title').focus({ preventScroll: true });
+    return true;
   }
   for (const id of ['endpoint-search-directory', 'endpoint-directory-scope']) $(id).addEventListener(id.includes('search') ? 'input' : 'change', () => { directoryPage = 0; renderDirectory(); });
   for (const id of ['endpoint-search', 'endpoint-direction']) $(id).addEventListener(id.includes('search') ? 'input' : 'change', () => { endpointPage = 0; renderEndpointRows(); });
+  for (const id of ['endpoint-status', 'endpoint-category']) $(id).addEventListener('change', () => { endpointPage = 0; renderAccountGroups(); renderEndpointRows(); });
+  $('endpoint-category-groups').addEventListener('click', event => { const button = event.target.closest('[data-endpoint-category]'); if (!button) return; $('endpoint-category').value = $('endpoint-category').value === button.dataset.endpointCategory ? '' : button.dataset.endpointCategory; endpointPage = 0; renderAccountGroups(); renderEndpointRows(); });
   for (const [prefix, render, read, write] of [
     ['endpoint-directory', renderDirectory, () => directoryPage, value => { directoryPage = value; }],
     ['endpoint', renderEndpointRows, () => endpointPage, value => { endpointPage = value; }],
@@ -174,7 +205,7 @@ export function createExplorer({ api, exactMoney, dateText, getTransactions, edi
   });
   $('edit-detail-transaction').addEventListener('click', () => { if (transactionDetail) editTransaction(transactionDetail.transaction.id); });
   return {
-    setEndpoints(rows) { endpoints = rows; endpointById = new Map(rows.map(node => [node.id, node])); $('endpoint-directory-status').textContent = ''; renderDirectory(); },
+    setEndpoints(rows) { endpoints = rows; endpointById = new Map(rows.map(node => [node.id, node])); memberships.setEndpoints(rows); $('endpoint-directory-status').textContent = ''; renderDirectory(); },
     directoryError() { $('endpoint-directory-status').textContent = 'The identity directory could not be loaded. Refresh the ledger to try again.'; },
     decisionVersion: () => decisionVersion,
     setDecisions(rows, expectedVersion = decisionVersion) { if (expectedVersion !== decisionVersion) return; decisions = rows; decisionsAvailable = true; if (!decisionBusy) $('relation-save-status').textContent = ''; renderConnections(); },

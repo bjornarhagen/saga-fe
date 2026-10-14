@@ -25,7 +25,7 @@ test('CSV import is idempotent, retains identical legitimate rows, and preserves
   assert.deepEqual(data.transactions.slice(0, 2).map(tx => tx.id), ids);
   const publicJSON = JSON.stringify(data);
   assert.equal(publicJSON.includes('synthetic-owned'), false);
-  assert.equal(publicJSON.includes('synthetic-shop'), false);
+  assert.ok(data.transactions.every(tx => tx.toEndpoint.kind === 'merchant-hint' && !tx.toEndpoint.evidence.isAccountIdentifier));
 });
 test('overlapping CSV metadata updates preserve transaction IDs and manual account labels', t => {
   const store = memory(t);

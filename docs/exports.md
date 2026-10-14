@@ -47,6 +47,7 @@ strings, so parse those fields separately when using the archive in another tool
 | `account_identifiers`, `category_identifiers`, `counterparty_identifiers` | Provider identifiers and links to ledger entities. |
 | `transactions`, `transaction_edits` | Source transactions and separate owner corrections. |
 | `transaction_relations` | Confirmed or dismissed transaction pairs, with creation and update timestamps. |
+| `external_endpoint_refs`, `transaction_account_memberships` | Saved external account/merchant references and independent sender/receiver membership decisions. |
 | `ingest_sources`, `ingest_batches`, `ingest_rows`, `source_transaction_keys` | Source identities, complete batch history, parsed row provenance and deduplication keys. |
 | `settings` | Forecast inputs, assumptions and other saved ledger settings. |
 
@@ -58,6 +59,11 @@ Database schema version 2 adds saved connection decisions. The JSON archive
 format remains version 1; `databaseSchemaVersion` and the table set identify
 the stored schema. A connection decision links two opaque transaction IDs and
 never merges their financial records.
+
+Database schema version 3 adds independent account membership decisions and
+their durable external references. Earlier payment-pair decisions are retained
+unchanged. Source observations, category corrections and account confirmations
+remain distinct data in the archive.
 
 This full archive is separate from the `canonical-v1` ingest format. It cannot
 be uploaded through the import picker to restore the database. Use the SQLite

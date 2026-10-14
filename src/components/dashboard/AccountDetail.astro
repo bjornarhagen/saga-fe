@@ -8,6 +8,7 @@
     </div>
   </header>
   <p id="account-detail-status" class="detail-status" role="status" aria-live="polite"></p>
+  <p id="endpoint-membership-save-status" class="detail-status" role="status" aria-live="polite"></p>
   <div id="account-detail-summary" class="metrics endpoint-summary"></div>
   <div class="detail-grid endpoint-detail-grid">
     <article class="card detail-info-card" aria-labelledby="account-detail-info-title">
@@ -15,16 +16,23 @@
       <div id="account-detail-body" class="detail-record"></div>
     </article>
     <article class="card detail-info-card" aria-labelledby="account-detail-identifiers-title">
-      <div class="card-heading"><h2 id="account-detail-identifiers-title">Source identifiers</h2></div>
-      <p class="input-note">Names and identifiers come from your imports. A missing name or identifier stays unknown.</p>
+      <div class="card-heading"><h2 id="account-detail-identifiers-title">Source evidence</h2></div>
+      <p class="input-note">An account field may contain a bank identifier, a provider ID, or merchant text. The source evidence and your transaction membership decisions are separate.</p>
       <div id="account-detail-identifiers" class="detail-identifiers"></div>
     </article>
   </div>
+  <article class="card endpoint-category-card" aria-labelledby="endpoint-category-title">
+    <div class="card-heading"><h2 id="endpoint-category-title">Groups by category</h2></div>
+    <p class="input-note">The account or merchant identifies where the money went. The category separates purposes such as food and electronics.</p>
+    <div id="endpoint-category-groups" class="endpoint-category-groups"></div>
+  </article>
   <article class="card transaction-card detail-history-card" aria-labelledby="endpoint-payments-title">
     <div class="card-heading"><h2 id="endpoint-payments-title">Payment history</h2><span id="endpoint-count" class="muted small" role="status" aria-live="polite"></span></div>
     <div class="endpoint-filters">
       <label>Search payments<input id="endpoint-search" type="search" placeholder="Search a payment or category…" aria-controls="endpoint-transactions" /></label>
       <label>Direction<select id="endpoint-direction" aria-controls="endpoint-transactions"><option value="all">All directions</option><option value="incoming">Incoming</option><option value="outgoing">Outgoing</option></select></label>
+      <label id="endpoint-status-label">Account confirmation<select id="endpoint-status" aria-controls="endpoint-transactions"><option value="active">Suggestions &amp; confirmed</option><option value="confirmed">Confirmed only</option><option value="suggested">Suggestions only</option><option value="dismissed">Dismissed accounts</option><option value="all">All source observations &amp; decisions</option></select></label>
+      <label>Category group<select id="endpoint-category" aria-controls="endpoint-transactions"><option value="">All categories</option></select></label>
     </div>
     <p id="endpoint-scope-note" class="input-note"></p>
     <div class="table-scroll">

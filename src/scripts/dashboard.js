@@ -76,7 +76,7 @@ function persist() {
     if (next) enqueueSettings(next);
   }, 500);
 }
-const explorer = createExplorer({ api, exactMoney, dateText, getTransactions: () => state.transactions, editTransaction, notify: toast });
+const explorer = createExplorer({ api, exactMoney, dateText, getTransactions: () => state.transactions, editTransaction, reloadLedger: async () => { if (await loadLocal() === false) throw new Error('The saved detail could not be refreshed.'); }, notify: toast });
 const accountController = createAccountController({ api, money, today, onChange: () => loadLocal(), onUse: () => { state.balanceSource = 'accounts'; renderForecast(); persist(); showView('forecast'); }, onError: handleError, toast,
   activityLink: account => { const node = explorer.endpointForAccount(account.id); return node ? `<p class="input-note">${explorer.endpointLink({ ...node, name: 'View payment history →' })}</p>` : ''; }
 });
@@ -145,7 +145,7 @@ function recalculate() {
   state.transactions = applyOverrides(state.data.transactions, state.overrides);
   state.base = state.transactions.length ? baseline(state.transactions, state.data.metadata.lastDate, state.lookback, state.data.metadata.firstDate) : { start: today.slice(0, 7), end: today.slice(0, 7), months: 0, income: 0, expense: 0, saving: 0 };
   renderOverview(); renderForecast(); renderTransactions(); renderData();
-  if (loaded) void explorer.openRoute(currentRoute);
+  return loaded ? explorer.openRoute(currentRoute) : Promise.resolve(true);
 }
 function renderOverview() {
   const r = range(); const tx = selectedTransactions(); const s = summarize(tx);
@@ -315,17 +315,18 @@ async function loadLocal() {
   if (directory) explorer.setEndpoints(directory); else explorer.directoryError();
   if (decisions) explorer.setDecisions(decisions, decisionReadVersion); else explorer.decisionError(decisionReadVersion);
   accountController.setData(payload.accountDetails || []);
-  loaded = true; initializeData();
+  loaded = true; const detailReady = await initializeData();
   try {
     const history = await api('/api/ingest');
     if (generation !== loadGeneration) return;
     $('ingest-history').innerHTML = history.batches.length ? '<h3>Recent imports</h3>' + history.batches.slice(0, 8).map(batch => `<div class="data-item"><span>${esc(batch.adapter)} · ${esc(batch.importedAt.slice(0, 10))}</span><strong>${batch.inserted} added · ${batch.existing} existing</strong></div>`).join('') : '<p class="input-note">No imports yet.</p>';
   } catch { /* Transaction and account data remains usable. */ }
+  return detailReady;
 }
 function initializeData() {
   $('range-start').value ||= state.data.metadata.firstDate || today; $('range-end').value = state.data.metadata.lastDate || today;
   state.page = 0;
-  $('content').hidden = false; $('loading').hidden = true; $('error').hidden = true; recalculate();
+  $('content').hidden = false; $('loading').hidden = true; $('error').hidden = true; return recalculate();
 }
 function handleError(error) { $('error').textContent = error.message; $('error').hidden = false; $('loading').hidden = true; }
 

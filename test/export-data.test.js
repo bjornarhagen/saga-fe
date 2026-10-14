@@ -23,12 +23,13 @@ test('complete JSON archive covers every schema table and preserves all saved le
   const transactions = store.getTransactions().transactions;
   const id = transactions[0].id;
   store.updateRelation({ transactionId: id, relatedTransactionId: transactions[1].id, status: 'confirmed' });
+  store.updateAccountMembership({ transactionId: id, side: 'to', endpointId: store.getTransactionDetail(id).to.id, status: 'confirmed' });
   store.updateOverride({ id, override: { category: 'Owner category', excludeForecast: true } });
   store.saveSettings({ fields: { cash: '-1.05', 'balance-date': '2026-01-02' }, assumptions: { income: 10000 }, balanceSource: 'manual' });
   const archive = JSON.parse(JSON.stringify(store.exportLedger()));
   assert.equal(archive.format, 'saga-fe-ledger');
   assert.equal(archive.formatVersion, 1);
-  assert.equal(archive.databaseSchemaVersion, 2);
+  assert.equal(archive.databaseSchemaVersion, 3);
   assert.equal(archive.amountUnit, 'ore');
   assert.equal(archive.currency, 'NOK');
   assert.ok(Number.isFinite(Date.parse(archive.exportedAt)));

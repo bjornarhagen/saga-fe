@@ -29,8 +29,10 @@ test('account endpoint directory covers both owned and external directions witho
   const reserve = directory.find(endpoint => endpoint.name === 'Reserve');
   const shop = directory.find(endpoint => endpoint.counterpartyName === 'Synthetic refund');
   assert.ok(shop && !shop.owned);
-  assert.equal(shop.labelSource, 'masked-identifier');
-  assert.equal(shop.name, 'External account ••••shop');
+  assert.equal(shop.labelSource, 'provider-text');
+  assert.equal(shop.kind, 'merchant-hint');
+  assert.equal(shop.evidence.isAccountIdentifier, false);
+  assert.equal(shop.name, 'fixture-shop');
   assert.deepEqual(cash.summary, { incoming: 100055, outgoing: 5210, net: 94845, payments: 5, transactionRows: 6, internalPayments: 1, firstDate: '2026-01-01', lastDate: '2026-01-01' });
   assert.equal(reserve.summary.incoming, 5000);
   assert.equal(reserve.summary.outgoing, 0);
@@ -40,7 +42,7 @@ test('account endpoint directory covers both owned and external directions witho
   assert.equal(shop.summary.outgoing, 55);
   assert.equal(shop.summary.payments, 3);
   const normalData = JSON.stringify([directory, store.getTransactions()]);
-  for (const identifier of ['fixture-shop', 'fixture-cash', 'fixture-employer', 'fixture-reserve']) assert.equal(normalData.includes(identifier), false);
+  for (const identifier of ['fixture-cash', 'fixture-reserve']) assert.equal(normalData.includes(identifier), false);
   assert.ok(store.getTransactions().transactions.every(transaction => transaction.fromEndpointId && transaction.toEndpointId));
 });
 

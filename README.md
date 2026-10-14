@@ -104,6 +104,26 @@ does not assert a duplicate or change either transaction, and decisions apply
 to the selected pair only; they do not automatically group other payments.
 Repeated imports keep these decisions. Both complete export formats include them.
 
+**Account confirmation** is a separate decision for each transaction's sender
+or receiver. Confirm, dismiss or reset it from either transaction details or
+the account history. You can assign a different existing external account or
+merchant; the imported source observation remains available. Each side has at
+most one confirmed recipient, and changing it dismisses the previous choice.
+Owned balance-account sides cannot be reassigned to an external recipient.
+
+An external account plus the existing category provides a purpose group, such
+as one merchant's food versus electronics payments. Account details include
+category totals and confirmation filters. Source suggestions are included in
+the default view; choose **Confirmed only** for reviewed account memberships.
+Dismissed and superseded source hints remain available for review. Search and
+direction filter the history; totals follow the confirmation and category filters.
+
+Source evidence has an explicit type. A bank account field containing merchant
+text is a **merchant hint**, not a verified bank account. Recorded numeric bank
+identifiers and declared provider account IDs are stronger source evidence,
+but do not become owner confirmations automatically. Existing payment-pair
+confirmations remain separate and are never converted into account approvals.
+
 Account movement totals infer matching debit/credit legs of internal bank
 transfers and count each pair once. Both original entries remain inspectable,
 with the pair marked in the history. Without provider transaction IDs this

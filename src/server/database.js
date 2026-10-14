@@ -33,15 +33,36 @@ CREATE TABLE transaction_relations (
   PRIMARY KEY(transaction_a,transaction_b),
   CHECK(transaction_a < transaction_b)
 );`;
-export const DATABASE_SCHEMA_VERSION = 2;
-const migrations = [null, schema, relationSchema];
+const membershipSchema = `
+CREATE TABLE external_endpoint_refs (
+  id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL CHECK(kind IN ('external-account','merchant-hint','unknown-endpoint','counterparty')),
+  source_id TEXT REFERENCES ingest_sources(id),
+  provider_identifier TEXT,
+  counterparty_id TEXT REFERENCES counterparties(id),
+  label TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE transaction_account_memberships (
+  transaction_id TEXT NOT NULL REFERENCES transactions(id),
+  side TEXT NOT NULL CHECK(side IN ('from','to')),
+  endpoint_id TEXT NOT NULL REFERENCES external_endpoint_refs(id),
+  status TEXT NOT NULL CHECK(status IN ('confirmed','dismissed')),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY(transaction_id,side,endpoint_id)
+);
+CREATE UNIQUE INDEX one_confirmed_account_per_side ON transaction_account_memberships(transaction_id,side) WHERE status='confirmed';`;
+export const DATABASE_SCHEMA_VERSION = 3;
+const migrations = [null, schema, relationSchema, membershipSchema];
 const now = () => new Date().toISOString();
 const own = (object, key) => Object.prototype.hasOwnProperty.call(object, key);
 export const LEDGER_TABLES = Object.freeze([
   'accounts', 'categories', 'counterparties', 'ingest_sources',
   'account_identifiers', 'category_identifiers', 'counterparty_identifiers',
   'balance_snapshots', 'transactions', 'source_transaction_keys',
-  'ingest_batches', 'ingest_rows', 'transaction_edits', 'settings', 'transaction_relations'
+  'ingest_batches', 'ingest_rows', 'transaction_edits', 'settings', 'transaction_relations', 'external_endpoint_refs', 'transaction_account_memberships'
 ]);
 
 export function createStore(path = ':memory:') {
@@ -98,6 +119,7 @@ export function createStore(path = ':memory:') {
     return { accounts, totals };
   };
   const getOverrides = () => Object.fromEntries(all('SELECT transaction_id,value_json FROM transaction_edits ORDER BY transaction_id').map(row => [row.transaction_id, JSON.parse(row.value_json)]));
+  const membershipRows = () => all('SELECT transaction_id AS transactionId,side,endpoint_id AS endpointId,status,created_at AS createdAt,updated_at AS updatedAt FROM transaction_account_memberships ORDER BY transaction_id,side,endpoint_id');
   const relationRows = () => all('SELECT transaction_a AS transactionId,transaction_b AS relatedTransactionId,status,created_at AS createdAt,updated_at AS updatedAt FROM transaction_relations ORDER BY transaction_a,transaction_b');
   const updateRelation = input => {
     v.object(input, 'Relationship decision');
@@ -148,7 +170,8 @@ export function createStore(path = ':memory:') {
   };
   const transactionRows = () => all(`SELECT t.*, c.name AS category,s.name AS subcategory,f.name AS fromAccount,a.name AS account,ta.name AS toAccount,cp.name AS counterparty FROM transactions t LEFT JOIN categories c ON c.id=t.category_id LEFT JOIN categories s ON s.id=t.subcategory_id LEFT JOIN accounts f ON f.id=t.from_account_id LEFT JOIN accounts ta ON ta.id=t.to_account_id LEFT JOIN accounts a ON a.id=t.account_id LEFT JOIN counterparties cp ON cp.id=t.counterparty_id ORDER BY t.date DESC,t.rowid`).map(row => ({ id: row.id, date: row.date, month: row.date.slice(0, 7), amount: row.amount, currency: row.currency, description: row.description, category: row.category || (row.amount > 0 ? 'Other money in' : 'Uncategorized'), subcategory: row.subcategory || '', type: row.bank_type, kind: row.kind, regularIncome: !!row.regular_income, review: !!row.needs_review, microSaving: !!row.micro_saving, fromAccount: row.fromAccount || '', toAccount: row.toAccount || '', account: row.account || '', accountId: row.account_id, fromAccountId: row.from_account_id, toAccountId: row.to_account_id, counterpartyId: row.counterparty_id, counterparty: row.counterparty || '' }));
   const activityProjection = (transactions = transactionRows(), overrides = getOverrides()) => projectActivity({
-    transactions, overrides, accounts: accountRows(),
+    transactions, overrides, accounts: accountRows(), membershipDecisions: membershipRows(),
+    endpointReferences: all('SELECT r.*,s.adapter FROM external_endpoint_refs r LEFT JOIN ingest_sources s ON s.id=r.source_id'),
     accountIdentifiers: all('SELECT i.*,s.adapter FROM account_identifiers i JOIN ingest_sources s ON s.id=i.source_id'),
     counterparties: all('SELECT id,name FROM counterparties'),
     counterpartyIdentifiers: all('SELECT i.*,s.adapter FROM counterparty_identifiers i JOIN ingest_sources s ON s.id=i.source_id'),
@@ -158,6 +181,35 @@ export function createStore(path = ':memory:') {
     db.exec('BEGIN');
     try { const result = action(); db.exec('COMMIT'); return result; }
     catch (error) { db.exec('ROLLBACK'); throw error; }
+  };
+  const updateAccountMembership = input => {
+    v.object(input, 'Account membership');
+    for (const key of Object.keys(input)) if (!['transactionId', 'side', 'endpointId', 'status'].includes(key)) throw new v.ValidationError('Unknown account membership field.');
+    const transactionId = v.string(input.transactionId, 'Transaction ID', 200), endpointId = v.string(input.endpointId, 'Endpoint ID', 200);
+    if (!['from', 'to'].includes(input.side)) throw new v.ValidationError('Account membership side must be from or to.');
+    if (input.status !== null && !['confirmed', 'dismissed'].includes(input.status)) throw new v.ValidationError('Account membership status must be confirmed, dismissed, or null to reset.');
+    return atomic(() => {
+      if (!query('SELECT id FROM transactions WHERE id=?', transactionId)) throw new v.ValidationError('The transaction must exist in the ledger.');
+      const projection = activityProjection();
+      const target = projection.endpointActivity(endpointId)?.endpoint;
+      const stored = query('SELECT id FROM external_endpoint_refs WHERE id=?', endpointId);
+      if (!target && !stored) throw new v.ValidationError('The external account or recipient must exist in the ledger.');
+      if (input.status === null) {
+        run('DELETE FROM transaction_account_memberships WHERE transaction_id=? AND side=? AND endpoint_id=?', transactionId, input.side, endpointId);
+        return { decisions: membershipRows() };
+      }
+      if (!target || target.owned) throw new v.ValidationError('Choose an external account or recipient for this membership.');
+      if (input.status === 'confirmed' && target.evidence?.kind === 'unknown') throw new v.ValidationError('Choose an identifiable external account or recipient. Unknown source placeholders cannot be confirmed.');
+      const detail = projection.transactionDetail(transactionId);
+      if ((input.side === 'from' ? detail.sourceFrom : detail.sourceTo)?.owned) throw new v.ValidationError('An imported owned-account side cannot be assigned to an external recipient.');
+      const reference = projection.referenceSnapshot(endpointId);
+      if (!reference) throw new v.ValidationError('The external endpoint reference is unavailable.');
+      const timestamp = now();
+      run('INSERT INTO external_endpoint_refs(id,kind,source_id,provider_identifier,counterparty_id,label,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET kind=excluded.kind,source_id=excluded.source_id,provider_identifier=excluded.provider_identifier,counterparty_id=excluded.counterparty_id,label=excluded.label,updated_at=excluded.updated_at WHERE external_endpoint_refs.kind IS NOT excluded.kind OR external_endpoint_refs.source_id IS NOT excluded.source_id OR external_endpoint_refs.provider_identifier IS NOT excluded.provider_identifier OR external_endpoint_refs.counterparty_id IS NOT excluded.counterparty_id OR external_endpoint_refs.label IS NOT excluded.label', reference.id, reference.kind, reference.sourceId, reference.providerIdentifier, reference.counterpartyId, reference.label, timestamp, timestamp);
+      if (input.status === 'confirmed') run("UPDATE transaction_account_memberships SET status='dismissed',updated_at=? WHERE transaction_id=? AND side=? AND endpoint_id!=? AND status='confirmed'", timestamp, transactionId, input.side, endpointId);
+      run('INSERT INTO transaction_account_memberships(transaction_id,side,endpoint_id,status,created_at,updated_at) VALUES(?,?,?,?,?,?) ON CONFLICT(transaction_id,side,endpoint_id) DO UPDATE SET status=excluded.status,updated_at=excluded.updated_at WHERE transaction_account_memberships.status!=excluded.status', transactionId, input.side, endpointId, input.status, timestamp, timestamp);
+      return { decisions: membershipRows() };
+    });
   };
   const getTransactions = () => readSnapshot(() => {
     const transactions = activityProjection().rows;
@@ -246,6 +298,7 @@ export function createStore(path = ':memory:') {
   return {
     ingest, getTransactions, getAccounts: accountPayload,
     getRelations: () => ({ decisions: relationRows() }), updateRelation,
+    getAccountMemberships: () => ({ decisions: membershipRows() }), updateAccountMembership,
     getEndpoints: () => readSnapshot(() => activityProjection().directory()),
     getEndpointActivity: id => readSnapshot(() => {
       v.string(id, 'Endpoint ID', 200); const result = activityProjection().endpointActivity(id);
