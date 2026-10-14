@@ -24,6 +24,12 @@ CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value_json TEXT NOT N
 PRAGMA user_version=1;`;
 const now = () => new Date().toISOString();
 const own = (object, key) => Object.prototype.hasOwnProperty.call(object, key);
+export const LEDGER_TABLES = Object.freeze([
+  'accounts', 'categories', 'counterparties', 'ingest_sources',
+  'account_identifiers', 'category_identifiers', 'counterparty_identifiers',
+  'balance_snapshots', 'transactions', 'source_transaction_keys',
+  'ingest_batches', 'ingest_rows', 'transaction_edits', 'settings'
+]);
 
 export function createStore(path = ':memory:') {
   if (path !== ':memory:') mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
@@ -180,6 +186,19 @@ export function createStore(path = ':memory:') {
   };
   return {
     ingest, getTransactions, getAccounts: accountPayload, getSettings, saveSettings, getOverrides, saveOverrides,
+    exportLedger: () => {
+      // A WAL reader sees one committed database state across every table,
+      // including writes made by a different application connection.
+      db.exec('BEGIN');
+      try {
+        const actual = all("SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").map(row => row.name);
+        if (JSON.stringify(actual) !== JSON.stringify([...LEDGER_TABLES].sort())) throw new Error('The ledger export must be updated for this schema.');
+        const tables = Object.fromEntries(LEDGER_TABLES.map(table => [table, all(`SELECT * FROM ${table} ORDER BY rowid`)]));
+        const archive = { format: 'saga-fe-ledger', formatVersion: 1, exportedAt: now(), databaseSchemaVersion: query('PRAGMA user_version').user_version, currency: 'NOK', amountUnit: 'ore', tables };
+        db.exec('COMMIT');
+        return archive;
+      } catch (error) { db.exec('ROLLBACK'); throw error; }
+    },
     getMetadata: () => ({ accounts: accountRows(), categories: all('SELECT id,name,parent_id AS parentId FROM categories ORDER BY name'), counterparties: all('SELECT id,name FROM counterparties ORDER BY name') }),
     getHistory: () => ({ adapters, batches: all('SELECT b.id,s.adapter,b.imported_at AS importedAt,b.filename,b.row_count AS rows,b.inserted_count AS inserted,b.existing_count AS existing,b.metadata_count AS metadata FROM ingest_batches b JOIN ingest_sources s ON s.id=b.source_id ORDER BY b.imported_at DESC,b.rowid DESC LIMIT 100') }),
     createAccount: input => {

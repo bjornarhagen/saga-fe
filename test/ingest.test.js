@@ -171,3 +171,140 @@ test('legacy hash collisions cannot silently replace the data of a different sou
   assert.equal(new Set(imported.map(tx => tx.id)).size, 2);
   assert.equal(store.ingest({ adapter: 'norwegian-bank-csv', content }).inserted, 0);
 });
+
+test('CSV header order, transaction order, line endings, and filenames do not create more transactions', t => {
+  const store = memory(t);
+  const first = row({ text: 'Synthetic first', amount: '-1.05' });
+  const second = row({ text: 'Synthetic second', amount: '-2.10' }).replace('2026-10-01', '2026-10-02');
+  const content = csv([first, second, first]);
+  store.ingest({ adapter: 'norwegian-bank-csv', filename: 'first.csv', content });
+  const before = store.getTransactions().transactions;
+  const ids = new Set(before.map(tx => tx.id));
+  store.saveOverrides({ [before[0].id]: { kind: 'saving', category: 'My correction', excludeForecast: true } });
+  const reordered = [headers, second, first, first].map(line => line.split(';').reverse().join(';')).join('\r\n');
+  const result = store.ingest({ adapter: 'norwegian-bank-csv', filename: 'renamed.csv', content: '\uFEFF' + reordered });
+  assert.equal(result.inserted, 0);
+  assert.equal(result.existing, 3);
+  const after = store.getTransactions();
+  assert.deepEqual(new Set(after.transactions.map(tx => tx.id)), ids);
+  assert.equal(after.transactions.reduce((sum, tx) => sum + tx.amount, 0), -420);
+  assert.equal(after.overrides[before[0].id].category, 'My correction');
+  assert.equal(after.metadata.duplicateRows, 1);
+});
+
+test('overlapping and smaller CSV windows retain the greatest observed identical-row count without deleting history', t => {
+  const store = memory(t);
+  const first = row({ text: 'Synthetic first' }), second = row({ text: 'Synthetic second' }), third = row({ text: 'Synthetic third' });
+  store.ingest({ adapter: 'norwegian-bank-csv', content: csv([first, second]) });
+  let result = store.ingest({ adapter: 'norwegian-bank-csv', content: csv([second, second, third]) });
+  assert.equal(result.inserted, 2); // One new occurrence plus the previously unseen payment.
+  const ids = new Set(store.getTransactions().transactions.map(tx => tx.id));
+  result = store.ingest({ adapter: 'norwegian-bank-csv', content: csv([second]) });
+  assert.equal(result.inserted, 0);
+  assert.equal(store.getTransactions().transactions.length, 4);
+  assert.deepEqual(new Set(store.getTransactions().transactions.map(tx => tx.id)), ids);
+  assert.equal(store.getTransactions().metadata.duplicateRows, 1);
+});
+
+test('canonical retries and reordered batches preserve identity, manual metadata, and transaction edits', t => {
+  const store = memory(t);
+  const data = {
+    accounts: [{ externalId: 'cash', name: 'Cash', role: 'available', balance: 105, balanceDate: '2026-10-01' }],
+    categories: [{ externalId: 'food', name: 'Food' }, { externalId: 'home', name: 'Home' }],
+    counterparties: [{ externalId: 'shop', name: 'Shop' }],
+    transactions: [{ externalId: 'first', date: '2026-10-01', amount: -105, accountExternalId: 'cash', categoryExternalId: 'food' }, { externalId: 'second', date: '2026-10-02', amount: -210, accountExternalId: 'cash', categoryExternalId: 'home' }]
+  };
+  store.ingest({ ...canonical(data), filename: 'first.json' });
+  const before = store.getTransactions(), account = before.accountDetails[0];
+  store.updateAccount({ id: account.id, name: 'My account', role: 'reserve', balance: 999, balanceDate: '2026-10-01' });
+  store.saveOverrides({ [before.transactions[0].id]: { category: 'My category', excludeForecast: true } });
+  let result = store.ingest({ ...canonical(data), filename: 'retry.json' });
+  assert.equal(result.duplicate, true);
+  assert.equal(store.getHistory().batches.length, 1);
+  const reordered = { transactions: data.transactions.toReversed(), counterparties: data.counterparties, categories: data.categories.toReversed(), accounts: data.accounts };
+  result = store.ingest(canonical(reordered));
+  assert.equal(result.inserted, 0);
+  assert.equal(result.existing, 2);
+  const after = store.getTransactions();
+  assert.deepEqual(new Set(after.transactions.map(tx => tx.id)), new Set(before.transactions.map(tx => tx.id)));
+  assert.equal(after.accountDetails[0].name, 'My account');
+  assert.equal(after.accountDetails[0].role, 'reserve');
+  assert.equal(after.accountDetails[0].balance, 999);
+  assert.equal(after.overrides[before.transactions[0].id].category, 'My category');
+});
+
+test('retrying an already imported canonical revision cannot undo a later correction', t => {
+  const store = memory(t);
+  const initial = canonical({ transactions: [{ externalId: 'payment', date: '2026-10-01', amount: -105 }] });
+  store.ingest(initial);
+  const id = store.getTransactions().transactions[0].id;
+  store.saveOverrides({ [id]: { category: 'Owner category', excludeForecast: true } });
+  store.ingest(canonical({ transactions: [{ ...initial.data.transactions[0], amount: -210 }] }));
+  const result = store.ingest(initial);
+  assert.equal(result.duplicate, true);
+  assert.equal(store.getTransactions().transactions[0].amount, -210);
+  assert.equal(store.getTransactions().transactions[0].id, id);
+  assert.equal(store.getOverrides()[id].excludeForecast, true);
+});
+
+test('metadata-only imports and their retries update one entity per external ID without undoing manual balances', t => {
+  const store = memory(t);
+  const initial = canonical({ accounts: [{ externalId: 'cash', name: 'Cash', balance: 105, balanceDate: '2026-10-01' }], categories: [{ externalId: 'food', name: 'Food' }], counterparties: [{ externalId: 'shop', name: 'Shop' }] });
+  store.ingest(initial);
+  const account = store.getAccounts().accounts[0];
+  store.updateAccount({ id: account.id, balance: 999, balanceDate: '2026-10-01' });
+  const changed = canonical({ accounts: [{ externalId: 'cash', name: 'Cash renamed', balance: 210, balanceDate: '2026-10-01' }], categories: [{ externalId: 'food', name: 'Groceries' }], counterparties: [{ externalId: 'shop', name: 'Shop renamed' }] });
+  store.ingest(changed);
+  assert.equal(store.ingest(changed).duplicate, true);
+  assert.equal(store.ingest(initial).duplicate, true);
+  const metadata = store.getMetadata();
+  assert.equal(metadata.accounts.length, 1);
+  assert.equal(metadata.accounts[0].name, 'Cash renamed');
+  assert.equal(metadata.accounts[0].balance, 999);
+  assert.equal(metadata.categories.length, 1);
+  assert.equal(metadata.categories[0].name, 'Groceries');
+  assert.equal(metadata.counterparties.length, 1);
+  assert.equal(metadata.counterparties[0].name, 'Shop renamed');
+  assert.equal(store.getTransactions().metadata.rows, 0);
+  assert.equal(store.getHistory().batches.length, 2);
+});
+
+test('ambiguous CSV columns and repeated canonical entity IDs are rejected before applying changes', t => {
+  const store = memory(t);
+  const duplicateColumns = headers + ';Tekst\n' + row() + ';Another description';
+  assert.throws(() => store.ingest({ adapter: 'norwegian-bank-csv', content: duplicateColumns }), /column names.*unique/);
+  for (const key of ['accounts', 'categories', 'counterparties']) {
+    assert.throws(() => store.ingest(canonical({ [key]: [{ externalId: 'same', name: 'First' }, { externalId: ' same ', name: 'Conflicting' }] })), /external IDs.*unique/);
+    assert.throws(() => store.ingest(canonical({ [key]: null })), /must be an array/);
+  }
+  assert.equal(store.getAccounts().accounts.length, 0);
+  assert.equal(store.getMetadata().categories.length, 0);
+  assert.equal(store.getHistory().batches.length, 0);
+});
+
+test('canonical balance imports require an explicit observation date and a nonempty source key', t => {
+  const store = memory(t);
+  for (const balance of [0, 105, null]) assert.throws(() => store.ingest(canonical({ accounts: [{ externalId: 'cash', name: 'Cash', balance }] })), /Balance date/);
+  for (const sourceKey of ['', ' ', null]) assert.throws(() => store.ingest({ ...canonical({ accounts: [{ externalId: 'cash', name: 'Cash' }] }), sourceKey }), /Source key/);
+  assert.equal(store.getAccounts().accounts.length, 0);
+  assert.equal(store.getHistory().batches.length, 0);
+});
+
+test('import identity and retry history remain durable after closing and reopening the database', async t => {
+  const { mkdtempSync, rmSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const directory = mkdtempSync(join(tmpdir(), 'saga-fe-ingest-restart-')), path = join(directory, 'ledger.sqlite');
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const content = csv([row(), row()]);
+  let store = createStore(path);
+  store.ingest({ adapter: 'norwegian-bank-csv', content });
+  const ids = store.getTransactions().transactions.map(tx => tx.id);
+  store.saveOverrides({ [ids[0]]: { category: 'Owner correction', excludeForecast: true } });
+  store.close();
+  store = createStore(path); t.after(() => store.close());
+  assert.equal(store.ingest({ adapter: 'norwegian-bank-csv', content, filename: 'after-restart.csv' }).duplicate, true);
+  assert.deepEqual(store.getTransactions().transactions.map(tx => tx.id), ids);
+  assert.equal(store.getOverrides()[ids[0]].category, 'Owner correction');
+  assert.equal(store.getHistory().batches.length, 1);
+});

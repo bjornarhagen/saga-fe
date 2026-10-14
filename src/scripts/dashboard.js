@@ -16,31 +16,60 @@ try { saved = JSON.parse(localStorage.getItem(storageKey) || localStorage.getIte
 const state = { data: null, transactions: [], view: 'overview', page: 0, horizon: saved.horizon || 3, lookback: saved.lookback || 3, overrides: saved.overrides || {}, assumptions: saved.assumptions || {}, editId: null, imported: false, scenario: saved.scenario || 'same', balanceSource: saved.balanceSource || 'manual' };
 let toastTimeout;
 function toast(message) { $('toast').textContent = message; $('toast').hidden = false; clearTimeout(toastTimeout); toastTimeout = setTimeout(() => { $('toast').hidden = true; }, 4500); }
-let loaded = false, saveTimer, saveChain = Promise.resolve();
-async function api(path, options = {}) {
-  const response = await fetch(path, { ...options, headers: { ...(options.body !== undefined ? { 'Content-Type': 'application/json' } : {}), ...options.headers }, ...(options.body !== undefined ? { body: JSON.stringify(options.body) } : {}) });
-  const result = await response.json();
-  if (response.status === 401) location.assign('/login');
-  if (!response.ok) throw new Error(result.error || 'The ledger could not be updated.');
-  return result;
+let loaded = false, saveTimer, pendingSettings, saveChain = Promise.resolve();
+const pendingWrites = new Set();
+function api(path, options = {}) {
+  const operation = (async () => {
+    const response = await fetch(path, { ...options, headers: { ...(options.body !== undefined ? { 'Content-Type': 'application/json' } : {}), ...options.headers }, ...(options.body !== undefined ? { body: JSON.stringify(options.body) } : {}) });
+    const result = await response.json();
+    if (response.status === 401) location.assign('/login');
+    if (!response.ok) throw new Error(result.error || 'The ledger could not be updated.');
+    return result;
+  })();
+  if (options.method && !['GET', 'HEAD'].includes(options.method)) {
+    pendingWrites.add(operation);
+    operation.then(() => pendingWrites.delete(operation), () => pendingWrites.delete(operation));
+  }
+  return operation;
 }
 function currentSettings() {
-  return { fields: Object.fromEntries(['cash', 'savings', 'buffer', 'balance-date', 'adjustment', 'one-off'].map(id => [id, $(id).value])), horizon: state.horizon, lookback: state.lookback, assumptions: state.assumptions, scenario: state.scenario, balanceSource: state.balanceSource };
+  return { fields: Object.fromEntries(['cash', 'savings', 'buffer', 'balance-date', 'adjustment', 'one-off'].map(id => [id, $(id).value])), horizon: state.horizon, lookback: state.lookback, assumptions: { ...state.assumptions }, scenario: state.scenario, balanceSource: state.balanceSource };
 }
 function applySettings(settings) {
   if (!settings) return;
   state.horizon = settings.horizon || 3; state.lookback = settings.lookback || 3; state.assumptions = settings.assumptions || {}; state.scenario = settings.scenario || 'same'; state.balanceSource = settings.balanceSource || 'manual';
-  for (const id of ['cash', 'savings', 'buffer', 'balance-date', 'adjustment', 'one-off']) if (settings.fields?.[id] !== undefined) $(id).value = settings.fields[id];
+  const defaults = { cash: '', savings: '', buffer: '', 'balance-date': today, adjustment: '0', 'one-off': '0' };
+  for (const id of Object.keys(defaults)) $(id).value = settings.fields?.[id] ?? defaults[id];
+}
+function enqueueSettings(settings) {
+  saveChain = saveChain.catch(() => {}).then(() => api('/api/settings', { method: 'PUT', body: { settings } })).then(() => { $('save-status').textContent = 'Saved'; });
+  saveChain.catch(error => { $('save-status').textContent = 'Not saved'; toast(error.message); });
+  return saveChain;
+}
+async function flushSavedWrites() {
+  let saved = true;
+  do {
+    clearTimeout(saveTimer);
+    if (pendingSettings) { const settings = pendingSettings; pendingSettings = null; enqueueSettings(settings); }
+    // A finishing correction can schedule another settings save. Drain both
+    // queues, including those follow-up writes, before reading the snapshot.
+    const results = await Promise.allSettled([saveChain, ...pendingWrites]);
+    if (results.some(result => result.status === 'rejected')) saved = false;
+  } while (pendingSettings || pendingWrites.size);
+  return saved;
 }
 function persist() {
   const settings = currentSettings();
   try { localStorage.setItem(storageKey, JSON.stringify({ ...settings, overrides: state.overrides })); } catch { /* The database remains authoritative. */ }
   if (!loaded) return;
   clearTimeout(saveTimer);
+  pendingSettings = null;
   if (Object.values(state.assumptions).some(value => !Number.isSafeInteger(value)) || ['cash', 'savings', 'buffer', 'balance-date', 'adjustment', 'one-off'].some(id => !$(id).validity.valid)) { $('save-status').textContent = 'Check inputs to save'; return; }
   $('save-status').textContent = 'Saving…';
+  pendingSettings = settings;
   saveTimer = setTimeout(() => {
-    saveChain = saveChain.catch(() => {}).then(() => api('/api/settings', { method: 'PUT', body: { settings } })).then(() => { $('save-status').textContent = 'Saved'; }).catch(error => { $('save-status').textContent = 'Not saved'; toast(error.message); });
+    const next = pendingSettings; pendingSettings = null;
+    if (next) enqueueSettings(next);
   }, 500);
 }
 const accountController = createAccountController({ api, money, today, onChange: () => loadLocal(), onUse: () => { state.balanceSource = 'accounts'; renderForecast(); persist(); showView('forecast'); }, onError: handleError, toast });
@@ -298,6 +327,26 @@ $('reset-transaction').addEventListener('click', async () => {
 });
 $('import-button').addEventListener('click', () => $('csv-input').click());
 $('data-import-button').addEventListener('click', () => $('csv-input').click());
+async function downloadLedger(format) {
+  const buttons = [$('export-ledger-json'), $('export-ledger-sqlite')];
+  buttons.forEach(button => { button.disabled = true; });
+  const status = $('ledger-export-status'); status.textContent = 'Finishing saves and preparing your export…';
+  try {
+    const savesFinished = await flushSavedWrites();
+    const response = await fetch(`/api/export?format=${format}`);
+    if (response.status === 401) location.assign('/login');
+    if (!response.ok) { const error = await response.json(); throw new Error(error.error || 'The ledger could not be exported.'); }
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob), link = document.createElement('a');
+    link.href = url;
+    link.download = response.headers.get('Content-Disposition')?.match(/filename="([^"]+)"/)?.[1] || `saga-fe-ledger-${today}.${format}`;
+    link.click(); setTimeout(() => URL.revokeObjectURL(url), 60000);
+    status.textContent = savesFinished ? 'Download ready. Keep your ledger export private.' : 'Download ready. Some changes could not be saved; this file contains the saved ledger.';
+  } catch (error) { status.textContent = 'Export failed. Your ledger is unchanged.'; toast(error.message); }
+  finally { buttons.forEach(button => { button.disabled = false; }); }
+}
+$('export-ledger-json').addEventListener('click', () => downloadLedger('json'));
+$('export-ledger-sqlite').addEventListener('click', () => downloadLedger('sqlite'));
 $('csv-input').addEventListener('change', async () => {
   const file = $('csv-input').files[0]; if (!file) return;
   $('ingest-status').textContent = 'Importing…';

@@ -325,6 +325,7 @@ dialog label { margin-block: var(--s-5); }
 .account-save-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--s-3); margin-top: var(--s-4); }
 #data-import-button { margin-block: var(--s-5) var(--s-2); }
 #ingest-history { margin-top: var(--s-5); }
+.export-actions { display: flex; flex-wrap: wrap; gap: var(--s-3); margin-block: var(--s-5); }
 input[readonly] { color: var(--fg-dim); background: var(--bg-2); }
 .login-body { display: grid; min-height: 100dvh; align-items: center; padding: var(--s-5); }
 .login-panel { width: 100%; max-width: 470px; margin-inline: auto; }

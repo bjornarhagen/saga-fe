@@ -68,7 +68,8 @@ excluded from source control and image build contexts.
 - **Accounts:** imported and manually added accounts, editable names, forecast
   roles, and dated balance snapshots.
 - **Data & method:** persistent imports, batch history, source statistics, and
-  calculation rules.
+  calculation rules. Download the complete ledger as JSON or a SQLite recovery
+  snapshot, including all balance dates, edits, settings and ingest records.
 
 Appearance has separate theme and mode controls. **Bjørnarhagen** provides the
 Saga charcoal, ivory, amber, and crimson palette; **Girlypop** uses blush, plum,
@@ -149,6 +150,9 @@ screenshots with financial data out of public Git, issues, and CI artifacts.
 The app uses no external fonts, analytics, AI calls, or live bank connections.
 
 ## Backups and remote deployment
+
+For downloads through the dashboard, see [complete ledger exports](docs/exports.md).
+Full archives are separate from the canonical JSON ingest format.
 
 Create a consistent online snapshot inside Docker, using a new destination:
 

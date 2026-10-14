@@ -11,6 +11,7 @@ function bankCSV(content) {
   let parsed, rows;
   try { parsed = parseExport(content); rows = csvRows(content); } catch { throw new v.ValidationError('The CSV is invalid. Check its Norwegian bank columns, amounts, dates, and quoted fields.'); }
   const [headers, ...values] = rows;
+  if (new Set(headers).size !== headers.length) throw new v.ValidationError('CSV column names must be unique.');
   const raw = values.map(value => Object.fromEntries(headers.map((header, i) => [header, value[i]])));
   const accounts = new Map();
   for (const row of raw) for (const side of ['Fra', 'Til']) if (row[`${side} konto`] && row[`${side} kontonummer`]) accounts.set(row[`${side} kontonummer`], { externalId: row[`${side} kontonummer`], name: row[`${side} konto`], currency: 'NOK' });
@@ -49,21 +50,30 @@ function bankCSV(content) {
 function canonical(data) {
   v.object(data, 'Canonical data');
   for (const key of Object.keys(data)) if (!['accounts', 'categories', 'counterparties', 'transactions'].includes(key)) throw new v.ValidationError('Unknown canonical data field.');
-  const accounts = v.list(data.accounts || [], 'Accounts', 10000).map(item => {
+  const accounts = v.list(data.accounts === undefined ? [] : data.accounts, 'Accounts', 10000).map(item => {
     v.object(item); const result = { externalId: v.string(item.externalId, 'Account external ID', 300), name: v.string(item.name, 'Account name'), currency: v.currency(item.currency) };
     if (item.id) result.id = v.string(item.id, 'Account ID', 200);
     if ('role' in item) result.role = v.role(item.role);
-    if ('balance' in item) { result.balance = item.balance === null ? null : v.amount(item.balance); result.balanceDate = v.date(item.balanceDate || v.today()); }
+    if ('balance' in item) { result.balance = item.balance === null ? null : v.amount(item.balance); result.balanceDate = v.date(item.balanceDate, 'Balance date'); }
     return result;
   });
-  const categories = v.list(data.categories || [], 'Categories', 10000).map(item => {
+  const categories = v.list(data.categories === undefined ? [] : data.categories, 'Categories', 10000).map(item => {
     v.object(item); return { id: item.id ? v.string(item.id, 'Category ID', 200) : null, externalId: v.string(item.externalId, 'Category external ID'), name: v.string(item.name, 'Category name', 200), parentExternalId: item.parentExternalId ? v.string(item.parentExternalId, 'Parent category ID') : null };
   });
-  const counterparties = v.list(data.counterparties || [], 'Counterparties', 10000).map(item => {
+  const counterparties = v.list(data.counterparties === undefined ? [] : data.counterparties, 'Counterparties', 10000).map(item => {
     v.object(item); return { id: item.id ? v.string(item.id, 'Counterparty ID', 200) : null, externalId: v.string(item.externalId, 'Counterparty external ID'), name: v.string(item.name, 'Counterparty name') };
   });
+  // A metadata batch must not depend on input order to resolve contradictory
+  // records for one provider identity. Multiple aliases may still link one ID.
+  for (const [label, items] of [['Account', accounts], ['Category', categories], ['Counterparty', counterparties]]) {
+    const identities = new Set();
+    for (const item of items) {
+      if (identities.has(item.externalId)) throw new v.ValidationError(`${label} external IDs must be unique within a batch.`);
+      identities.add(item.externalId);
+    }
+  }
   const seen = new Set();
-  const transactions = v.list(data.transactions || [], 'Transactions').map((item, index) => {
+  const transactions = v.list(data.transactions === undefined ? [] : data.transactions, 'Transactions').map((item, index) => {
     v.object(item); const externalId = v.string(item.externalId, 'Transaction external ID', 500);
     if (seen.has(externalId)) throw new v.ValidationError('Canonical transaction external IDs must be unique within a batch.'); seen.add(externalId);
     const amount = v.amount(item.amount);
@@ -78,7 +88,7 @@ function canonical(data) {
 export function adapt(input) {
   v.object(input, 'Import');
   const adapter = v.string(input.adapter, 'Adapter', 100);
-  const sourceKey = v.string(input.sourceKey || 'default', 'Source key', 200);
+  const sourceKey = v.string(input.sourceKey === undefined ? 'default' : input.sourceKey, 'Source key', 200);
   const filename = input.filename ? v.string(input.filename, 'Filename', 255).split(/[\\/]/).at(-1) : null;
   const data = adapter === 'norwegian-bank-csv' ? bankCSV(input.content) : adapter === 'canonical-v1' ? canonical(input.data) : null;
   if (!data) throw new v.ValidationError('Unknown ingestion adapter.');
