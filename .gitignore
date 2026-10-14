@@ -1,5 +1,10 @@
-*.csv
-*.tsv
+*.[cC][sS][vV]
+*.[tT][sS][vV]
+*.[jJ][sS][oO][nN]
+!package.json
+!package-lock.json
+!tsconfig.json
+!deploy/kubernetes/tailscale/serve-config.json
 *.sqlite
 *.sqlite-*
 *.db

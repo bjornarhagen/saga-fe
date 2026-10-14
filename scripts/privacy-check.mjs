@@ -7,6 +7,9 @@ const root = resolve(process.argv.find(arg => arg.startsWith('--root='))?.slice(
 const sourceMode = process.argv.includes('--source');
 const generated = new Set(['.git', 'node_modules', '.astro', 'dist']);
 const privateDirs = new Set(['.budget-data', 'data', 'secrets', 'backups', 'exports']);
+// JSON is also an ingest format. New source configuration must be reviewed
+// explicitly instead of accidentally publishing an account or metadata export.
+const sourceJSON = new Set(['package.json', 'package-lock.json', 'tsconfig.json', 'deploy/kubernetes/tailscale/serve-config.json']);
 const forbidden = /(?:\.(?:csv|tsv|sqlite(?:-[a-z]+)?|db(?:-[a-z]+)?|dump|bak|pem|key|agekey)$|(?:^|\/)\.env(?:\.|$)|(?:^|\/)[^/]*auth[^/]*\.json$)/i;
 const screenshot = /(?:screenshot|preview|capture)[^/]*\.(?:png|jpe?g|webp)$/i;
 const failures = [];
@@ -20,7 +23,7 @@ async function walk(directory) {
       if (privateDirs.has(entry.name)) { if (!sourceMode) failures.push(`${name}: private runtime directory`); continue; }
       await walk(path); continue;
     }
-    if (forbidden.test(name) && !name.endsWith('.env.example')) { if (!sourceMode) failures.push(`${name}: private data or credential file`); continue; }
+    if ((forbidden.test(name) || (/\.json$/i.test(name) && !sourceJSON.has(name))) && !name.endsWith('.env.example')) { if (!sourceMode) failures.push(`${name}: private data or credential file`); continue; }
     if (screenshot.test(name)) { failures.push(`${name}: unreviewed screenshot`); continue; }
     const bytes = await readFile(path); count++;
     if (/\.(?:woff2?|png|jpg|jpeg|webp|ico)$/.test(name)) continue;

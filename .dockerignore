@@ -4,8 +4,12 @@ dist
 .git
 .budget-data
 transactions.csv
-*.csv
-*.tsv
+*.[cC][sS][vV]
+*.[tT][sS][vV]
+*.[jJ][sS][oO][nN]
+!package.json
+!package-lock.json
+!tsconfig.json
 *.sqlite*
 *.db*
 *.dump
