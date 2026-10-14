@@ -4,6 +4,7 @@ import { mkdirSync, readFileSync, existsSync, chmodSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { adapt, adapters, digest } from './adapters.js';
 import * as v from './validation.js';
+import { projectActivity } from './activity.js';
 
 const schema = `
 CREATE TABLE IF NOT EXISTS accounts (id TEXT PRIMARY KEY, name TEXT NOT NULL, currency TEXT NOT NULL DEFAULT 'NOK', role TEXT NOT NULL DEFAULT 'available' CHECK(role IN ('available','reserve','excluded')), name_override INTEGER NOT NULL DEFAULT 0, role_override INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL);
@@ -100,12 +101,25 @@ export function createStore(path = ':memory:') {
       return value;
     });
   };
-  const getTransactions = () => {
-    const transactions = all(`SELECT t.*, c.name AS category,s.name AS subcategory,f.name AS fromAccount,a.name AS account,ta.name AS toAccount,cp.name AS counterparty FROM transactions t LEFT JOIN categories c ON c.id=t.category_id LEFT JOIN categories s ON s.id=t.subcategory_id LEFT JOIN accounts f ON f.id=t.from_account_id LEFT JOIN accounts ta ON ta.id=t.to_account_id LEFT JOIN accounts a ON a.id=t.account_id LEFT JOIN counterparties cp ON cp.id=t.counterparty_id ORDER BY t.date DESC,t.rowid`).map(row => ({ id: row.id, date: row.date, month: row.date.slice(0, 7), amount: row.amount, currency: row.currency, description: row.description, category: row.category || (row.amount > 0 ? 'Other money in' : 'Uncategorized'), subcategory: row.subcategory || '', type: row.bank_type, kind: row.kind, regularIncome: !!row.regular_income, review: !!row.needs_review, microSaving: !!row.micro_saving, fromAccount: row.fromAccount || '', toAccount: row.toAccount || '', account: row.account || '', accountId: row.account_id, fromAccountId: row.from_account_id, toAccountId: row.to_account_id, counterpartyId: row.counterparty_id, counterparty: row.counterparty || '' }));
+  const transactionRows = () => all(`SELECT t.*, c.name AS category,s.name AS subcategory,f.name AS fromAccount,a.name AS account,ta.name AS toAccount,cp.name AS counterparty FROM transactions t LEFT JOIN categories c ON c.id=t.category_id LEFT JOIN categories s ON s.id=t.subcategory_id LEFT JOIN accounts f ON f.id=t.from_account_id LEFT JOIN accounts ta ON ta.id=t.to_account_id LEFT JOIN accounts a ON a.id=t.account_id LEFT JOIN counterparties cp ON cp.id=t.counterparty_id ORDER BY t.date DESC,t.rowid`).map(row => ({ id: row.id, date: row.date, month: row.date.slice(0, 7), amount: row.amount, currency: row.currency, description: row.description, category: row.category || (row.amount > 0 ? 'Other money in' : 'Uncategorized'), subcategory: row.subcategory || '', type: row.bank_type, kind: row.kind, regularIncome: !!row.regular_income, review: !!row.needs_review, microSaving: !!row.micro_saving, fromAccount: row.fromAccount || '', toAccount: row.toAccount || '', account: row.account || '', accountId: row.account_id, fromAccountId: row.from_account_id, toAccountId: row.to_account_id, counterpartyId: row.counterparty_id, counterparty: row.counterparty || '' }));
+  const activityProjection = (transactions = transactionRows(), overrides = getOverrides()) => projectActivity({
+    transactions, overrides, accounts: accountRows(),
+    accountIdentifiers: all('SELECT i.*,s.adapter FROM account_identifiers i JOIN ingest_sources s ON s.id=i.source_id'),
+    counterparties: all('SELECT id,name FROM counterparties'),
+    counterpartyIdentifiers: all('SELECT i.*,s.adapter FROM counterparty_identifiers i JOIN ingest_sources s ON s.id=i.source_id'),
+    lineage: all(`WITH latest AS (SELECT r.*,b.source_id,s.adapter,b.rowid AS importOrder,ROW_NUMBER() OVER(PARTITION BY r.transaction_id ORDER BY b.rowid DESC,r.row_number DESC) AS rank FROM ingest_rows r JOIN ingest_batches b ON b.id=r.batch_id JOIN ingest_sources s ON s.id=b.source_id) SELECT * FROM latest WHERE rank=1`)
+  });
+  const readSnapshot = action => {
+    db.exec('BEGIN');
+    try { const result = action(); db.exec('COMMIT'); return result; }
+    catch (error) { db.exec('ROLLBACK'); throw error; }
+  };
+  const getTransactions = () => readSnapshot(() => {
+    const transactions = activityProjection().rows;
     const detail = accountPayload();
     const duplicateRows = query('SELECT COALESCE(SUM(CASE WHEN occurrence>0 THEN 1 ELSE 0 END),0) AS count FROM source_transaction_keys').count;
     return { transactions, accounts: detail.accounts.map(account => account.name), accountDetails: detail.accounts, accountTotals: detail.totals, overrides: getOverrides(), settings: getSettings(), metadata: { rows: transactions.length, duplicateRows, zeroRows: transactions.filter(tx => tx.amount === 0).length, firstDate: transactions.at(-1)?.date || null, lastDate: transactions[0]?.date || null, currency: 'NOK', hasBalances: detail.totals.hasBalances, sources: query('SELECT COUNT(*) AS count FROM ingest_sources').count, batches: query('SELECT COUNT(*) AS count FROM ingest_batches').count } };
-  };
+  });
   const ingest = input => {
     const adapted = adapt(input);
     return atomic(() => {
@@ -185,7 +199,26 @@ export function createStore(path = ':memory:') {
     });
   };
   return {
-    ingest, getTransactions, getAccounts: accountPayload, getSettings, saveSettings, getOverrides, saveOverrides,
+    ingest, getTransactions, getAccounts: accountPayload,
+    getEndpoints: () => readSnapshot(() => activityProjection().directory()),
+    getEndpointActivity: id => readSnapshot(() => {
+      v.string(id, 'Endpoint ID', 200); const result = activityProjection().endpointActivity(id);
+      if (result?.endpoint.accountId) {
+        const account = accountRows().find(row => row.id === result.endpoint.accountId);
+        Object.assign(result.endpoint, { role: account.role, balance: account.balance, balanceDate: account.balanceDate, balanceHistory: all('SELECT as_of AS date,amount FROM balance_snapshots WHERE account_id=? ORDER BY as_of DESC,created_at DESC', account.id) });
+      }
+      return result;
+    }),
+    getTransactionDetail: id => readSnapshot(() => {
+      v.string(id, 'Transaction ID', 200); const result = activityProjection().transactionDetail(id);
+      if (!result) return null;
+      result.provenance = all('SELECT b.id AS batchId,b.source_id AS sourceId,s.adapter,b.filename,b.imported_at AS importedAt,r.row_number AS rowNumber FROM ingest_rows r JOIN ingest_batches b ON b.id=r.batch_id JOIN ingest_sources s ON s.id=b.source_id WHERE r.transaction_id=? ORDER BY b.rowid DESC,r.row_number DESC', id);
+      const latest = query('SELECT r.raw_json FROM ingest_rows r JOIN ingest_batches b ON b.id=r.batch_id WHERE r.transaction_id=? ORDER BY b.rowid DESC,r.row_number DESC LIMIT 1', id);
+      result.sourceFields = latest ? JSON.parse(latest.raw_json) : null;
+      return result;
+    }),
+    getCounterpartyActivity: id => readSnapshot(() => { v.string(id, 'Counterparty ID', 200); return activityProjection().counterpartyActivity(id); }),
+    getSettings, saveSettings, getOverrides, saveOverrides,
     exportLedger: () => {
       // A WAL reader sees one committed database state across every table,
       // including writes made by a different application connection.

@@ -56,7 +56,7 @@ const canSignOut = Astro.cookies.has('saga_fe_session');
         <button class="nav" data-view="accounts"><span class="nav-key" aria-hidden="true">04</span> Accounts</button>
         <button class="nav" data-view="data"><span class="nav-key" aria-hidden="true">05</span> Data & method</button>
       </nav>
-      <main id="main-content">
+      <main id="main-content" tabindex="-1">
         <div class="topbar"><span class="breadcrumb">~ <span class="status-sep">/</span> personal <span class="status-sep">/</span> <span id="topbar-view">Overview</span></span><span id="data-status" class="data-status">Reading your ledger…</span></div>
         <div id="error" class="error-banner" role="alert" hidden></div>
         <div id="loading" class="loading"><span aria-hidden="true">[ … ]</span> Reading your ledger…</div>

@@ -1,7 +1,7 @@
 import { getStore } from './database.js';
 import { ValidationError, object } from './validation.js';
 
-class HttpError extends Error {
+export class HttpError extends Error {
   constructor(status, message) { super(message); this.status = status; }
 }
 export async function readJSON(request, limit = 2 * 1024 * 1024) {

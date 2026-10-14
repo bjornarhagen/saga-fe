@@ -6,12 +6,16 @@ import Transactions from '../components/dashboard/Transactions.astro';
 import DataMethod from '../components/dashboard/DataMethod.astro';
 import TransactionDialog from '../components/dashboard/TransactionDialog.astro';
 import Accounts from '../components/dashboard/Accounts.astro';
+import TransactionDetail from '../components/dashboard/TransactionDetail.astro';
+import AccountDetail from '../components/dashboard/AccountDetail.astro';
 ---
 <DashboardLayout>
   <Overview />
   <Forecast />
   <Transactions />
   <Accounts />
+  <TransactionDetail />
+  <AccountDetail />
   <DataMethod />
   <TransactionDialog slot="dialog" />
 </DashboardLayout>

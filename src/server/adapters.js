@@ -79,6 +79,12 @@ function canonical(data) {
     const amount = v.amount(item.amount);
     const tx = { externalId, sourceFingerprint: digest(externalId), occurrence: 0, date: v.date(item.date), amount, currency: v.currency(item.currency), description: v.string(item.description || 'Bank transfer', 'Description', 2000), kind: v.kindForAmount(item.kind || (amount > 0 ? 'income' : 'expense'), amount), regularIncome: item.regularIncome === undefined ? false : v.boolean(item.regularIncome, 'Regular income'), review: item.review === undefined ? false : v.boolean(item.review, 'Review'), microSaving: item.microSaving === undefined ? false : v.boolean(item.microSaving, 'Micro-saving'), type: v.string(item.type || '', 'Transaction type', 200, true), rowNumber: index + 1, raw: item };
     for (const key of ['categoryExternalId', 'subcategoryExternalId', 'fromAccountExternalId', 'toAccountExternalId', 'accountExternalId', 'counterpartyExternalId']) tx[key] = item[key] ? v.string(item[key], key, 500) : null;
+    for (const key of ['fromExternalAccount', 'toExternalAccount']) if (item[key] !== undefined) {
+      v.object(item[key], key); v.string(item[key].externalId, 'External account identity', 500);
+      const ownedReference = key === 'fromExternalAccount' ? tx.fromAccountExternalId : tx.toAccountExternalId;
+      if (ownedReference) throw new v.ValidationError('One transaction side cannot specify both an owned account and an external account.');
+      if (item[key].name !== undefined) v.string(item[key].name, 'External account label', 300);
+    }
     if (!tx.accountExternalId) tx.accountExternalId = amount < 0 ? tx.fromAccountExternalId : tx.toAccountExternalId;
     return tx;
   });

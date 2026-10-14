@@ -1,0 +1,42 @@
+<section id="account-view" class="view detail-view" aria-labelledby="account-detail-title" hidden>
+  <header class="page-heading detail-page-heading">
+    <div>
+      <a id="account-detail-back" class="detail-back" href="#accounts" data-detail-back>← Back to accounts &amp; identities</a>
+      <p class="eyebrow">04 / ACCOUNT &amp; IDENTITY DETAILS</p>
+      <h1 id="account-detail-title" tabindex="-1">Account details.</h1>
+      <p class="subtitle">Explore the saved information and payments involving this account or sender/receiver.</p>
+    </div>
+  </header>
+  <p id="account-detail-status" class="detail-status" role="status" aria-live="polite"></p>
+  <div id="account-detail-summary" class="metrics endpoint-summary"></div>
+  <div class="detail-grid endpoint-detail-grid">
+    <article class="card detail-info-card" aria-labelledby="account-detail-info-title">
+      <div class="card-heading"><h2 id="account-detail-info-title">Saved information</h2></div>
+      <div id="account-detail-body" class="detail-record"></div>
+    </article>
+    <article class="card detail-info-card" aria-labelledby="account-detail-identifiers-title">
+      <div class="card-heading"><h2 id="account-detail-identifiers-title">Source identifiers</h2></div>
+      <p class="input-note">Names and identifiers come from your imports. A missing name or identifier stays unknown.</p>
+      <div id="account-detail-identifiers" class="detail-identifiers"></div>
+    </article>
+  </div>
+  <article class="card transaction-card detail-history-card" aria-labelledby="endpoint-payments-title">
+    <div class="card-heading"><h2 id="endpoint-payments-title">Payment history</h2><span id="endpoint-count" class="muted small" role="status" aria-live="polite"></span></div>
+    <div class="endpoint-filters">
+      <label>Search payments<input id="endpoint-search" type="search" placeholder="Search a payment or category…" aria-controls="endpoint-transactions" /></label>
+      <label>Direction<select id="endpoint-direction" aria-controls="endpoint-transactions"><option value="all">All directions</option><option value="incoming">Incoming</option><option value="outgoing">Outgoing</option></select></label>
+    </div>
+    <p id="endpoint-scope-note" class="input-note"></p>
+    <div class="table-scroll">
+      <table class="detail-payments-table">
+        <caption class="sr-only">Payments involving this account or sender/receiver</caption>
+        <thead><tr><th scope="col">Date</th><th scope="col">Payment</th><th scope="col">Sender → receiver</th><th scope="col" class="numeric">Amount</th></tr></thead>
+        <tbody id="endpoint-transactions"></tbody>
+      </table>
+    </div>
+    <div class="pagination">
+      <span id="endpoint-page-label" class="muted small"></span>
+      <div><button id="endpoint-previous" type="button" class="outline-button" disabled>← Previous</button><button id="endpoint-next" type="button" class="outline-button" disabled>Next →</button></div>
+    </div>
+  </article>
+</section>

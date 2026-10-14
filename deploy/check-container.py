@@ -168,6 +168,85 @@ try {
     subprocess.run(["docker", "exec", "-i", container, "node", "--input-type=module", "-e", verify], input=fixture, check=True, stdout=subprocess.DEVNULL)
 
 
+def private_json(base, path, cookie, expected_status=200):
+    status, body, headers = request(base, path, cookie=cookie)
+    assert status == expected_status, "private activity API returned an unexpected status"
+    assert headers.get("Cache-Control") == "no-store", "private activity response was cacheable"
+    assert headers.get("X-Content-Type-Options") == "nosniff", "private activity response omitted nosniff"
+    assert "application/json" in headers.get("Content-Type", ""), "private activity API did not return JSON"
+    return json.loads(body)
+
+
+def check_activity(base, cookie):
+    # A separate source preserves the existing export/recovery fixture above.
+    # These provider identifiers, labels and source references are synthetic.
+    identifiers = ("fixture-activity-cash", "fixture-activity-reserve", "fixture-activity-shop", "fixture-activity-employer")
+    columns = ("Dato", "Beløp", "Originalt Beløp", "Original Valuta", "Til konto", "Til kontonummer", "Fra konto", "Fra kontonummer", "Type", "Tekst", "KID", "Hovedkategori", "Underkategori")
+
+    def row(amount="-1.05", from_name="Synthetic activity cash", from_id=identifiers[0], to_name="", to_id=identifiers[2], kind="Betaling", description="Synthetic activity payment", category="Synthetic food"):
+        return ";".join(("2026-01-01", amount, amount, "NOK", to_name, to_id, from_name, from_id, kind, description, "fixture-activity-reference", category, ""))
+
+    content = "\n".join((";".join(columns), row(), row(),
+        row(amount="0.55", from_name="", from_id=identifiers[2], to_name="Synthetic activity cash", to_id=identifiers[0], description="Synthetic activity refund"),
+        row(amount="1000.00", from_name="", from_id=identifiers[3], to_name="Synthetic activity cash", to_id=identifiers[0], kind="Inntekt", description="Synthetic activity salary", category="Income"),
+        row(amount="-50.00", to_name="Synthetic activity reserve", to_id=identifiers[1], kind="Overføring", description="Synthetic debit leg"),
+        row(amount="50.00", to_name="Synthetic activity reserve", to_id=identifiers[1], kind="Overføring", description="Synthetic credit leg")))
+    ingest = {"adapter": "norwegian-bank-csv", "sourceKey": "container-activity", "filename": "synthetic-activity.csv", "content": content}
+    for _ in range(2):
+        assert request(base, "/api/ingest", "POST", ingest, cookie)[0] == 200, "synthetic activity ingestion failed"
+
+    directory = private_json(base, "/api/endpoints", cookie)["endpoints"]
+    cash = next(endpoint for endpoint in directory if endpoint["name"] == "Synthetic activity cash")
+    reserve = next(endpoint for endpoint in directory if endpoint["name"] == "Synthetic activity reserve")
+    accounts = private_json(base, "/api/accounts", cookie)["accounts"]
+    assert len(accounts) == 3 and cash["owned"] and reserve["owned"], "external endpoint appeared as an owned balance account"
+    assert all(endpoint["id"] not in identifiers for endpoint in directory), "directory returned raw identifiers as navigation IDs"
+    normal = json.dumps(directory) + json.dumps(private_json(base, "/api/transactions", cookie))
+    assert all(identifier not in normal for identifier in identifiers), "normal activity lists exposed raw provider identifiers"
+    assert cash["summary"] == {"incoming": 100055, "outgoing": 5210, "net": 94845, "payments": 5, "transactionRows": 6, "internalPayments": 1, "firstDate": "2026-01-01", "lastDate": "2026-01-01"}, "mirrored activity was counted incorrectly"
+    assert reserve["summary"]["incoming"] == 5000 and reserve["summary"]["payments"] == 1 and reserve["summary"]["transactionRows"] == 2, "recipient internal transfer was double-counted"
+
+    cash_path = "/api/endpoints/" + urllib.parse.quote(cash["id"], safe="")
+    activity = private_json(base, cash_path, cookie)
+    assert activity["coverage"]["allHistory"] is True, "endpoint activity omitted complete-history coverage"
+    assert len(activity["transactions"]) == 6 and len({transaction["id"] for transaction in activity["transactions"]}) == 6, "activity dropped or duplicated original rows"
+    transfer = next(flow for flow in activity["flows"] if flow["internal"])
+    assert transfer["pairedRows"] and transfer["pairing"] == "matched-bank-export-legs" and transfer["amount"] == 5000 and len(transfer["transactionIds"]) == 2, "bank transfer legs were not paired conservatively"
+    assert sum(bool(transaction["pairedRows"]) for transaction in activity["transactions"]) == 2, "original paired transfer rows were lost"
+    payment = next(transaction for transaction in activity["transactions"] if transaction["amount"] == -105)
+    detail_path = "/api/transactions/" + urllib.parse.quote(payment["id"], safe="")
+    detail = private_json(base, detail_path, cookie)
+    assert detail["from"]["id"] == cash["id"] and detail["from"]["owned"] and not detail["to"]["owned"], "transaction sender or receiver identity was incorrect"
+    assert detail["transaction"]["fromEndpointId"] == detail["from"]["id"] and detail["transaction"]["toEndpointId"] == detail["to"]["id"], "transaction links were not opaque endpoint identities"
+    assert any(identifier["value"] == identifiers[0] for identifier in detail["from"]["identifiers"]), "authorized sender detail omitted its source identifier"
+    assert any(identifier["value"] == identifiers[2] for identifier in detail["to"]["identifiers"]), "authorized receiver detail omitted its source identifier"
+    assert detail["sourceFields"]["KID"] == "fixture-activity-reference" and detail["sourceFields"]["Original Valuta"] == "NOK" and detail["sourceFields"]["Originalt Beløp"] == "-1.05", "transaction source fields were incomplete"
+    assert len(detail["provenance"]) == 1 and detail["provenance"][0]["adapter"] == "norwegian-bank-csv" and isinstance(detail["provenance"][0]["rowNumber"], int), "transaction source provenance was lost"
+    override = {"id": payment["id"], "override": {"category": "Synthetic detail correction", "kind": "saving", "excludeForecast": True}}
+    assert request(base, "/api/overrides", "PATCH", override, cookie)[0] == 200, "detail correction failed"
+    edited = private_json(base, detail_path, cookie)
+    assert edited["transaction"]["kind"] == "saving" and edited["transaction"]["excludeForecast"] is True and edited["original"]["kind"] == "expense" and edited["override"]["category"] == "Synthetic detail correction", "detail confused edited and original classifications"
+
+    receiver_path = "/api/endpoints/" + urllib.parse.quote(detail["to"]["id"], safe="")
+    receiver = private_json(base, receiver_path, cookie)
+    assert receiver["summary"]["incoming"] == 210 and receiver["summary"]["outgoing"] == 55 and receiver["summary"]["payments"] == 3, "external sender/receiver direction was incorrect"
+    party_path = "/api/counterparties/" + urllib.parse.quote(detail["to"]["counterpartyId"], safe="")
+    party = private_json(base, party_path, cookie)
+    assert party["summary"] == receiver["summary"] and len(party["transactions"]) == 3, "counterparty activity did not follow related endpoints"
+    for path in (cash_path, detail_path, receiver_path, party_path):
+        assert all(identifier not in path for identifier in identifiers), "navigation URL contains a provider identifier"
+        denied_status, denied_body, _ = request(base, path)
+        assert denied_status == 401 and set(json.loads(denied_body)) == {"error"}, "detail API disclosed private activity without owner login"
+    for prefix in ("/api/endpoints/", "/api/transactions/", "/api/counterparties/"):
+        assert set(private_json(base, prefix + "missing-opaque-fixture", cookie, 404)) == {"error"}, "unknown detail returned private data"
+    assert set(private_json(base, "/api/endpoints/" + identifiers[0], cookie, 404)) == {"error"}, "raw provider identifier was accepted as a detail route"
+
+    for balance, date in ((20345, "2026-02-01"), (None, "2026-02-02")):
+        assert request(base, "/api/accounts", "PATCH", {"id": cash["accountId"], "balance": balance, "balanceDate": date}, cookie)[0] == 200, "synthetic activity balance update failed"
+    saved = private_json(base, cash_path, cookie)["endpoint"]
+    assert saved["balance"] is None and saved["balanceDate"] == "2026-02-02" and saved["balanceHistory"] == [{"date": "2026-02-02", "amount": None}, {"date": "2026-02-01", "amount": 20345}], "endpoint detail confused unknown balance with zero or lost history"
+
+
 def main():
     if len(sys.argv) != 2:
         raise SystemExit("usage: python3 deploy/check-container.py IMAGE")
@@ -189,7 +268,7 @@ def main():
                          "-e", "SAGA_FE_AUTH_FILE=/run/secrets/saga-fe/missing.json", image)
         containers.append(missing)
         base = wait_healthy(missing)
-        for path in ("/api/transactions", "/api/accounts", "/api/export?format=json", "/api/export?format=sqlite"):
+        for path in ("/api/transactions", "/api/accounts", "/api/endpoints", "/api/endpoints/missing-opaque-fixture", "/api/transactions/missing-opaque-fixture", "/api/counterparties/missing-opaque-fixture", "/api/export?format=json", "/api/export?format=sqlite"):
             status, _, _ = request(base, path)
             assert status in (401, 403, 503), f"unauthenticated request was not denied: {path} ({status})"
         docker("stop", "--time", "1", missing)
@@ -212,6 +291,8 @@ def main():
             base = wait_healthy(container)
             check_script_assets(base, "/login")
             assert request(base, "/api/accounts")[0] == 401, "finance API did not require login"
+            for path in ("/api/endpoints", "/api/endpoints/missing-opaque-fixture", "/api/transactions/missing-opaque-fixture", "/api/counterparties/missing-opaque-fixture"):
+                assert request(base, path)[0] == 401, "activity API did not require owner login"
             for format in ("json", "sqlite"):
                 assert request(base, "/api/export?format=" + format)[0] == 401, "export did not require owner login"
             assert request(base, "/api/session", "POST", {"password": "wrong"})[0] == 401, "wrong password accepted"
@@ -255,7 +336,8 @@ def main():
             docker("exec", container, "node", "scripts/backup.mjs", "/tmp/fixture-backup.sqlite")
             verify = "import {DatabaseSync} from 'node:sqlite';const db=new DatabaseSync('/tmp/fixture-backup.sqlite',{readOnly:true});if(db.prepare('PRAGMA integrity_check').get().integrity_check!=='ok'||db.prepare('SELECT count(*) AS n FROM transactions').get().n!==1)process.exit(1);db.close();"
             docker("exec", container, "node", "--input-type=module", "-e", verify)
-        print("Restricted runtime, owner login, ingestion, saved data persistence, full ledger exports and SQLite recovery passed with synthetic data.")
+            check_activity(base, cookie)
+        print("Restricted runtime, owner login, ingestion, persistence, exports, SQLite recovery and payment/account detail APIs passed with synthetic data.")
     except Exception:
         # These isolated containers contain only the synthetic fixtures above.
         for container in containers:

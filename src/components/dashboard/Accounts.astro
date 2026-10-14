@@ -3,4 +3,18 @@
   <div id="account-summary" class="metrics account-summary"></div>
   <article class="review-banner"><div><strong id="account-readiness">Set your account balances to build a starting point.</strong><p>Imported transactions do not establish opening or current balances. Blank means unknown; zero is a real balance. Excluded accounts stay out of the forecast.</p></div><button id="use-account-balances" class="outline-button">Use balances for forecast →</button></article>
   <div id="account-cards" class="accounts-grid"></div>
+  <article class="card endpoint-directory" aria-labelledby="endpoint-directory-title">
+    <div class="card-heading"><div><p class="eyebrow">EVERY SIDE OF A PAYMENT</p><h2 id="endpoint-directory-title">All senders &amp; receivers</h2></div><span id="endpoint-directory-count" class="muted small" role="status" aria-live="polite"></span></div>
+    <p class="input-note">Explore your own accounts and external senders or receivers recorded in the ledger. Labels are supplied by your imports; unknown identities stay unknown.</p>
+    <div class="endpoint-filters">
+      <label>Search accounts and identities<input id="endpoint-search-directory" type="search" placeholder="Search a name or account label…" aria-controls="endpoint-directory-list" /></label>
+      <label>Show<select id="endpoint-directory-scope" aria-controls="endpoint-directory-list"><option value="all">All identities</option><option value="owned">My accounts</option><option value="external">External senders &amp; receivers</option></select></label>
+    </div>
+    <p id="endpoint-directory-status" class="detail-status" role="status" aria-live="polite"></p>
+    <div id="endpoint-directory-list" class="endpoint-directory-list"></div>
+    <div class="pagination">
+      <span id="endpoint-directory-page-label" class="muted small"></span>
+      <div><button id="endpoint-directory-previous" type="button" class="outline-button" disabled>← Previous</button><button id="endpoint-directory-next" type="button" class="outline-button" disabled>Next →</button></div>
+    </div>
+  </article>
 </section>

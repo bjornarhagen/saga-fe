@@ -14,7 +14,7 @@ export function accountStartingPoint(accounts) {
   return { ready: true, date: [...dates][0], cash, savings };
 }
 
-export function createAccountController({ api, money, today, onChange, onUse, onError, toast }) {
+export function createAccountController({ api, money, today, onChange, onUse, onError, toast, activityLink = () => '' }) {
   let accounts = [];
   const $ = id => document.getElementById(id);
   function render() {
@@ -28,11 +28,11 @@ export function createAccountController({ api, money, today, onChange, onUse, on
     const start = accountStartingPoint(accounts);
     $('account-readiness').textContent = start.ready ? `Balances ready as of ${start.date}. Available cash and reserves do not overlap.` : start.reason;
     $('use-account-balances').disabled = !start.ready;
-    $('account-cards').innerHTML = accounts.length ? accounts.map(account => `<form class="card account-form" data-account-id="${escape(account.id)}"><div class="card-heading"><h2>${escape(account.name)}</h2><span class="badge">${escape(account.currency)}</span></div><label>Account name<input name="name" value="${escape(account.name)}" maxlength="200" required /></label><label>Use in forecast<select name="role">${[['available', 'Available cash'], ['reserve', 'Savings reserve'], ['excluded', 'Excluded']].map(([value, label]) => `<option value="${value}" ${account.role === value ? 'selected' : ''}>${label}</option>`).join('')}</select></label><div class="account-fields"><label>Balance in NOK<input name="balance" type="number" step="0.01" value="${account.balance === null ? '' : (account.balance / 100).toFixed(2)}" placeholder="Unknown" /></label><label>Balance date<input name="balanceDate" type="date" value="${escape(account.balanceDate || today)}" required /></label></div><div class="account-save-row"><span class="input-note">${account.balance === null ? 'No balance has been set.' : `Saved snapshot: ${escape(account.balanceDate)}`}</span><button class="outline-button" type="submit">Save account</button></div></form>`).join('') : '<article class="card no-results">No accounts yet. Import data or add an account.</article>';
+    $('account-cards').innerHTML = accounts.length ? accounts.map(account => `<form class="card account-form" data-account-id="${escape(account.id)}"><div class="card-heading"><h2>${escape(account.name)}</h2><span class="badge">${escape(account.currency)}</span></div>${activityLink(account)}<label>Account name<input name="name" value="${escape(account.name)}" maxlength="200" required /></label><label>Use in forecast<select name="role">${[['available', 'Available cash'], ['reserve', 'Savings reserve'], ['excluded', 'Excluded']].map(([value, label]) => `<option value="${value}" ${account.role === value ? 'selected' : ''}>${label}</option>`).join('')}</select></label><div class="account-fields"><label>Balance in NOK<input name="balance" type="number" step="0.01" value="${account.balance === null ? '' : (account.balance / 100).toFixed(2)}" placeholder="Unknown" /></label><label>Balance date<input name="balanceDate" type="date" value="${escape(account.balanceDate || today)}" required /></label></div><div class="account-save-row"><span class="input-note">${account.balance === null ? 'No balance has been set.' : `Saved snapshot: ${escape(account.balanceDate)}`}</span><button class="outline-button" type="submit">Save account</button></div></form>`).join('') : '<article class="card no-results">No accounts yet. Import data or add an account.</article>';
   }
   $('account-cards').addEventListener('submit', async event => {
     event.preventDefault(); const form = event.target.closest('form[data-account-id]'); if (!form) return;
-    const button = form.querySelector('button'); button.disabled = true;
+    const button = form.querySelector('button[type=submit]'); button.disabled = true;
     try {
       const values = new FormData(form);
       await api('/api/accounts', { method: 'PATCH', body: { id: form.dataset.accountId, name: values.get('name'), role: values.get('role'), balance: integerAmount(values.get('balance')), balanceDate: values.get('balanceDate') } });

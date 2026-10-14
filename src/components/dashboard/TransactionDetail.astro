@@ -1,0 +1,38 @@
+<section id="transaction-view" class="view detail-view" aria-labelledby="transaction-detail-title" hidden>
+  <header class="page-heading detail-page-heading">
+    <div>
+      <a id="transaction-detail-back" class="detail-back" href="#transactions" data-detail-back>← Back to transactions</a>
+      <p class="eyebrow">03 / PAYMENT DETAILS</p>
+      <h1 id="transaction-detail-title" tabindex="-1">Transaction details.</h1>
+      <p class="subtitle">Follow a payment from sender to receiver and explore its connections.</p>
+    </div>
+    <button id="edit-detail-transaction" type="button" class="outline-button">Review this transaction</button>
+  </header>
+  <p id="transaction-detail-status" class="detail-status" role="status" aria-live="polite"></p>
+  <div id="transaction-detail-body" class="detail-record"></div>
+  <article class="card transaction-card detail-history-card" aria-labelledby="related-payments-title">
+    <div class="card-heading">
+      <div>
+        <p class="eyebrow">KEEP FOLLOWING THE MONEY</p>
+        <h2 id="related-payments-title">Connected payments</h2>
+      </div>
+      <span id="related-count" class="muted small" role="status" aria-live="polite"></span>
+    </div>
+    <div class="detail-mode-switch" role="group" aria-label="Connected payment view">
+      <button type="button" class="detail-mode-button" data-related-mode="related" aria-pressed="true" aria-controls="transaction-detail-related">Related payments</button>
+      <button type="button" class="detail-mode-button" data-related-mode="duplicates" aria-pressed="false" aria-controls="transaction-detail-related">Possible duplicates</button>
+    </div>
+    <p class="input-note">Connections use saved sender/receiver identities or meaningful descriptions. Possible duplicates share a booking date, signed amount and route or description. These are suggestions for review; each entry remains in your ledger.</p>
+    <div class="table-scroll">
+      <table class="detail-payments-table">
+        <caption class="sr-only">Payments connected to this transaction</caption>
+        <thead><tr><th scope="col">Date</th><th scope="col">Payment</th><th scope="col">Sender → receiver</th><th scope="col" class="numeric">Amount</th></tr></thead>
+        <tbody id="transaction-detail-related"></tbody>
+      </table>
+    </div>
+    <div class="pagination">
+      <span id="related-page-label" class="muted small"></span>
+      <div><button id="related-previous" type="button" class="outline-button" disabled>← Previous</button><button id="related-next" type="button" class="outline-button" disabled>Next →</button></div>
+    </div>
+  </article>
+</section>

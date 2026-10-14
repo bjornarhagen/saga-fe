@@ -64,9 +64,12 @@ excluded from source control and image build contexts.
 - **Look ahead:** adjustable forecasts for the next one, two, or three months,
   with regular income, spending, external savings, a cash buffer, and one-offs.
 - **Transactions:** search, filter, sort, correct classifications, and exclude
-  historical one-offs from forecast averages. Export filtered results as CSV.
+  historical one-offs from forecast averages. Open any payment to see its sender,
+  receiver, exact amount, source fields, saved corrections, and import history.
+  Export filtered results as CSV.
 - **Accounts:** imported and manually added accounts, editable names, forecast
-  roles, and dated balance snapshots.
+  roles, and dated balance snapshots. The sender/receiver directory also includes
+  external accounts and counterparties, with complete incoming/outgoing history.
 - **Data & method:** persistent imports, batch history, source statistics, and
   calculation rules. Download the complete ledger as JSON or a SQLite recovery
   snapshot, including all balance dates, edits, settings and ingest records.
@@ -76,6 +79,28 @@ Saga charcoal, ivory, amber, and crimson palette; **Girlypop** uses blush, plum,
 pink, and gold; **Matrix** uses a phosphor-green terminal palette. Every theme
 supports **Light**, **Dark**, and **System** mode. Appearance stays per browser.
 Charts and components use shared semantic tokens, and fonts are self-hosted.
+
+Payment and account details have reloadable links with opaque ledger IDs.
+Account activity covers all saved dates, independently of the Overview period.
+External sender/receiver identities stay separate from your balance accounts.
+Source labels are shown as supplied; missing names use masked identifiers and
+missing identities remain unknown. Account details show full source identifiers
+only inside the private application.
+
+**Related payments** use saved party/route identities or a meaningful normalized
+description. Reasons appear beside every suggestion. **Possible duplicates**
+also require the same booking date, signed amount and currency, plus a matching
+route or description without a known route conflict. A shared owned account or
+amount alone is insufficient. These suggestions do not merge, remove or edit
+payments. They can miss duplicates whose dates or amounts differ.
+
+Account movement totals infer matching debit/credit legs of internal bank
+transfers and count each pair once. Both original entries remain inspectable,
+with the pair marked in the history. Without provider transaction IDs this
+pairing is inferred from source, date, amount, direction and occurrence counts.
+Movement totals describe imported history, not a current balance. The table
+shows direction relative to the selected account and preserves the signed
+ledger amount when it differs.
 
 ## Balances and forecasts
 

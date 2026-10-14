@@ -106,6 +106,16 @@ The canonical transaction can additionally carry `regularIncome`, `review`,
 coupling the database to a bank-specific export. Only NOK is currently accepted;
 foreign currencies require an explicit valuation model before aggregation.
 
+To describe an external sender or receiver without adding an owned balance
+account, supply `fromExternalAccount` or `toExternalAccount` on a transaction:
+`{ "externalId": "example-recipient-account", "name": "Supplied recipient label" }`.
+The name is optional; the stable external ID is required and scoped to the
+ingest source. Do not supply an owned and external account for the same side.
+These descriptors remain source metadata and do not change transaction identity.
+The activity API derives opaque endpoint IDs from the source identity. A
+counterparty can be linked separately through `counterpartyExternalId`; an
+account label alone does not verify the account holder's identity.
+
 ## Retry and correction behavior
 
 Use one stable, nonempty `sourceKey` per feed; omission uses `default`. Filename

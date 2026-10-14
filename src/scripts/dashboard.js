@@ -1,10 +1,14 @@
 import { createAccountController } from './accounts.js';
+import { createExplorer } from './explorer.js';
+import { parseRoute, routeHash, parentView } from './routes.js';
 import { applyOverrides, summarize, monthlySeries, baseline, project, shiftMonth } from '../lib/engine.js';
 
 const $ = id => document.getElementById(id);
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const number = new Intl.NumberFormat('nb-NO', { maximumFractionDigits: 0 });
 const money = cents => number.format(cents / 100) + ' kr';
+const exactNumber = new Intl.NumberFormat('nb-NO', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const exactMoney = cents => exactNumber.format(cents / 100) + ' kr';
 const shortMoney = cents => Math.abs(cents) >= 100000000 ? (cents / 100000000).toFixed(1) + 'm' : Math.abs(cents) >= 100000 ? number.format(cents / 100000) + 'k' : number.format(cents / 100);
 const dateText = date => new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' }).format(new Date(date + 'T12:00:00Z'));
 const monthText = (month, long = false) => new Intl.DateTimeFormat('en-GB', { month: long ? 'long' : 'short', year: 'numeric', timeZone: 'UTC' }).format(new Date(month + '-01T12:00:00Z'));
@@ -72,7 +76,10 @@ function persist() {
     if (next) enqueueSettings(next);
   }, 500);
 }
-const accountController = createAccountController({ api, money, today, onChange: () => loadLocal(), onUse: () => { state.balanceSource = 'accounts'; renderForecast(); persist(); showView('forecast'); }, onError: handleError, toast });
+const explorer = createExplorer({ api, exactMoney, dateText, getTransactions: () => state.transactions, editTransaction });
+const accountController = createAccountController({ api, money, today, onChange: () => loadLocal(), onUse: () => { state.balanceSource = 'accounts'; renderForecast(); persist(); showView('forecast'); }, onError: handleError, toast,
+  activityLink: account => { const node = explorer.endpointForAccount(account.id); return node ? `<p class="input-note">${explorer.endpointLink({ ...node, name: 'View payment history →' })}</p>` : ''; }
+});
 function syncAccountStartingPoint() {
   $('balance-source').value = state.balanceSource;
   for (const id of ['cash', 'savings', 'balance-date']) $(id).readOnly = state.balanceSource === 'accounts';
@@ -83,21 +90,47 @@ function syncAccountStartingPoint() {
   else { $('cash').value = ''; $('savings').value = ''; }
   return starting.ready;
 }
-function showView(view, scroll = true) {
-  if (!['overview', 'forecast', 'transactions', 'accounts', 'data'].includes(view)) view = 'overview';
+let currentRoute = parseRoute(location.hash);
+const routePositions = new Map();
+history.scrollRestoration = 'manual';
+function activateRoute(route, { scroll = true, focus = false, restore = false } = {}) {
+  currentRoute = route;
+  const view = route.view, parent = parentView(route);
   state.view = view;
   document.querySelectorAll('.view').forEach(el => { el.hidden = el.id !== view + '-view'; });
   document.querySelectorAll('.nav').forEach(el => {
-    el.classList.toggle('active', el.dataset.view === view);
-    if (el.dataset.view === view) el.setAttribute('aria-current', 'page');
+    el.classList.toggle('active', el.dataset.view === parent);
+    if (el.dataset.view === parent) el.setAttribute('aria-current', 'page');
     else el.removeAttribute('aria-current');
   });
-  $('topbar-view').textContent = { overview: 'Overview', forecast: 'Look ahead', transactions: 'Transactions', accounts: 'Accounts', data: 'Data & method' }[view];
-  history.replaceState(null, '', '#' + view);
+  $('topbar-view').textContent = { overview: 'Overview', forecast: 'Look ahead', transactions: 'Transactions', accounts: 'Accounts', data: 'Data & method', transaction: 'Transaction details', account: 'Account details' }[view];
   if (state.data && view === 'forecast') renderForecast();
   if (state.data && view === 'overview') renderOverview();
-  if (scroll) window.scrollTo({ top: 0, behavior: 'instant' });
+  if (scroll) window.scrollTo({ top: restore ? routePositions.get(routeHash(route)) || 0 : 0, behavior: 'instant' });
+  if (loaded) void explorer.openRoute(route, { focus }).then(() => {
+    if (restore && ['account', 'transaction'].includes(view) && routeHash(currentRoute) === routeHash(route)) window.scrollTo({ top: routePositions.get(routeHash(route)) || 0, behavior: 'instant' });
+  });
+  if (focus && !['account', 'transaction'].includes(view)) {
+    const heading = $(view + '-view').querySelector('h1');
+    heading?.setAttribute('tabindex', '-1'); heading?.focus({ preventScroll: true });
+  }
 }
+function navigateRoute(route, { scroll = true, focus = true } = {}) {
+  routePositions.set(routeHash(currentRoute), window.scrollY);
+  const hash = routeHash(route);
+  if (location.hash !== hash) history.pushState(null, '', hash);
+  activateRoute(route, { scroll, focus, restore: !['account', 'transaction'].includes(route.view) });
+}
+function showView(view, scroll = true) { navigateRoute(parseRoute('#' + view), { scroll, focus: scroll }); }
+function restoreRoute() {
+  if (location.hash === '#main-content') return;
+  const next = parseRoute(location.hash);
+  if (routeHash(next) === routeHash(currentRoute)) return;
+  routePositions.set(routeHash(currentRoute), window.scrollY);
+  activateRoute(next, { focus: true, restore: true });
+}
+window.addEventListener('popstate', restoreRoute);
+window.addEventListener('hashchange', restoreRoute);
 function range() {
   const endMonth = (state.data.metadata.lastDate || today).slice(0, 7);
   const choice = $('period').value;
@@ -112,6 +145,7 @@ function recalculate() {
   state.transactions = applyOverrides(state.data.transactions, state.overrides);
   state.base = state.transactions.length ? baseline(state.transactions, state.data.metadata.lastDate, state.lookback, state.data.metadata.firstDate) : { start: today.slice(0, 7), end: today.slice(0, 7), months: 0, income: 0, expense: 0, saving: 0 };
   renderOverview(); renderForecast(); renderTransactions(); renderData();
+  if (loaded) void explorer.openRoute(currentRoute);
 }
 function renderOverview() {
   const r = range(); const tx = selectedTransactions(); const s = summarize(tx);
@@ -218,7 +252,7 @@ function filteredTransactions() {
   const query = $('search').value.toLocaleLowerCase().trim();
   const category = $('category-filter').value, kind = $('kind-filter').value;
   const tx = $('transaction-period').value === 'all' ? state.transactions : selectedTransactions();
-  const result = tx.filter(t => (!query || `${t.description} ${t.category} ${t.subcategory} ${t.account}`.toLocaleLowerCase().includes(query)) && (!category || t.category === category) && (!kind || t.kind === kind) && (!$('review-only').checked || t.review) && (!$('excluded-only').checked || t.excludeForecast));
+  const result = tx.filter(t => (!query || `${t.description} ${t.category} ${t.subcategory} ${t.account} ${t.fromAccount} ${t.toAccount} ${t.counterparty} ${t.fromEndpoint?.name || ''} ${t.toEndpoint?.name || ''}`.toLocaleLowerCase().includes(query)) && (!category || t.category === category) && (!kind || t.kind === kind) && (!$('review-only').checked || t.review) && (!$('excluded-only').checked || t.excludeForecast));
   const sort = $('transaction-sort').value;
   return result.sort((a, b) => sort === 'outflow' ? a.amount - b.amount : sort === 'inflow' ? b.amount - a.amount : sort === 'oldest' ? a.date.localeCompare(b.date) : b.date.localeCompare(a.date));
 }
@@ -232,7 +266,7 @@ function renderTransactions() {
   const shown = tx.slice(state.page * perPage, (state.page + 1) * perPage);
   $('transaction-count').textContent = `${number.format(tx.length)} matches`;
   const kindLabels = { expense: 'Spending', income: 'Money in', saving: 'Savings', transfer: 'Transfer' };
-  $('transaction-rows').innerHTML = shown.length ? shown.map(t => `<tr><td>${dateText(t.date)}<small>${esc(t.account || 'Unknown account')}</small></td><td>${esc(t.description)}${t.review ? '<small class="review-tag">● Needs review</small>' : ''}${t.excludeForecast ? '<small>One-off · excluded from forecast</small>' : ''}</td><td>${esc(t.category)}<small>${esc(t.subcategory)}</small></td><td><span class="badge ${t.kind}">${kindLabels[t.kind]}</span></td><td class="numeric ${t.amount > 0 ? 'positive' : ''}">${t.amount > 0 ? '+' : ''}${money(t.amount)}</td><td><button class="edit-button" data-edit="${t.id}" aria-label="Review ${esc(t.description)}">Edit</button></td></tr>`).join('') : '<tr><td colspan="6" class="no-results">No transactions match these filters.</td></tr>';
+  $('transaction-rows').innerHTML = shown.length ? shown.map(t => { const node = explorer.endpointForAccount(t.accountId); return `<tr><td>${dateText(t.date)}<small>${node ? explorer.endpointLink(node) : esc(t.account || 'Unknown account')}</small></td><td><a class="ledger-link" href="${esc(routeHash({ view: 'transaction', id: t.id }))}">${esc(t.description || 'Untitled transaction')}</a>${t.review ? '<small class="review-tag">● Needs review</small>' : ''}${t.excludeForecast ? '<small>One-off · excluded from forecast</small>' : ''}</td><td>${esc(t.category)}<small>${esc(t.subcategory)}</small></td><td><span class="badge ${t.kind}">${kindLabels[t.kind]}</span></td><td class="numeric ${t.amount > 0 ? 'positive' : ''}">${t.amount > 0 ? '+' : ''}${money(t.amount)}</td><td><button class="edit-button" data-edit="${esc(t.id)}" aria-label="Review ${esc(t.description)}">Edit</button></td></tr>`; }).join('') : '<tr><td colspan="6" class="no-results">No transactions match these filters.</td></tr>';
   $('page-label').textContent = tx.length ? `${state.page * perPage + 1}–${Math.min((state.page + 1) * perPage, tx.length)} of ${number.format(tx.length)}` : '0 transactions';
   $('previous-page').disabled = state.page === 0;
   $('next-page').disabled = (state.page + 1) * perPage >= tx.length;
@@ -242,7 +276,7 @@ function renderData() {
   const m = state.data.metadata;
   const info = [['Source', 'Private SQLite ledger'], ['Date range', m.firstDate ? `${dateText(m.firstDate)} – ${dateText(m.lastDate)}` : 'No transactions imported'], ['Rows', number.format(m.rows)], ['Internal transfer rows', number.format(state.transactions.filter(t => t.kind === 'transfer').length)], ['Repeated identical rows retained', number.format(m.duplicateRows)], ['Zero-amount rows', number.format(m.zeroRows)], ['Dated account balances', `${(state.data.accountDetails || []).filter(a => a.balance !== null).length} set`], ['Ingest sources', number.format(m.sources || 0)], ['Import batches', number.format(m.batches || 0)], ['Saved transaction edits', number.format(Object.keys(state.overrides).length)]];
   $('data-details').innerHTML = `<div class="data-list">${info.map(([key, value]) => `<div class="data-item"><span>${key}</span><strong>${esc(value)}</strong></div>`).join('')}</div>`;
-  $('account-details').innerHTML = state.data.accounts.map(name => `<div class="account-item"><span class="account-symbol" aria-hidden="true">⊞</span>${esc(name)}</div>`).join('');
+  $('account-details').innerHTML = (state.data.accountDetails || []).map(account => { const node = explorer.endpointForAccount(account.id); return `<div class="account-item"><span class="account-symbol" aria-hidden="true">⊞</span>${node ? explorer.endpointLink(node) : esc(account.name)}</div>`; }).join('');
   $('data-status').textContent = m.lastDate ? `${number.format(m.rows)} rows · Through ${dateText(m.lastDate)}` : 'No data yet · Import a CSV or JSON file';
   $('footer-date').textContent = m.lastDate ? `Through ${dateText(m.lastDate)}` : 'Awaiting first import';
 }
@@ -257,7 +291,9 @@ function editTransaction(id) {
   $('edit-dialog').showModal();
 }
 function clearFilters() { $('search').value = ''; $('category-filter').value = ''; $('kind-filter').value = ''; $('review-only').checked = false; $('excluded-only').checked = false; $('transaction-sort').value = 'newest'; state.page = 0; }
+let loadGeneration = 0;
 async function loadLocal() {
+  const generation = ++loadGeneration;
   const payload = await api('/api/transactions');
   if (!loaded) {
     if (payload.settings === null && Object.keys(saved).length) {
@@ -267,13 +303,18 @@ async function loadLocal() {
         const result = await api('/api/overrides', { method: 'PUT', body: { overrides: { ...saved.overrides, ...payload.overrides } } }); payload.overrides = result.overrides;
       }
     }
-    applySettings(payload.settings);
   }
+  let directory;
+  try { directory = (await api('/api/endpoints')).endpoints; } catch { /* Keep the main ledger usable if its directory fails. */ }
+  if (generation !== loadGeneration) return;
+  if (!loaded) applySettings(payload.settings);
   state.data = payload; state.overrides = payload.overrides || {}; state.imported = false;
+  if (directory) explorer.setEndpoints(directory); else explorer.directoryError();
   accountController.setData(payload.accountDetails || []);
   loaded = true; initializeData();
   try {
     const history = await api('/api/ingest');
+    if (generation !== loadGeneration) return;
     $('ingest-history').innerHTML = history.batches.length ? '<h3>Recent imports</h3>' + history.batches.slice(0, 8).map(batch => `<div class="data-item"><span>${esc(batch.adapter)} · ${esc(batch.importedAt.slice(0, 10))}</span><strong>${batch.inserted} added · ${batch.existing} existing</strong></div>`).join('') : '<p class="input-note">No imports yet.</p>';
   } catch { /* Transaction and account data remains usable. */ }
 }
@@ -286,6 +327,8 @@ function handleError(error) { $('error').textContent = error.message; $('error')
 
 document.addEventListener('click', event => {
   const el = event.target.closest('button, a'); if (!el) return;
+  if (el.matches('a.ledger-link, a[data-detail-back]') && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey && event.button === 0) { event.preventDefault(); navigateRoute(parseRoute(el.hash)); return; }
+  if (el.classList.contains('skip-link')) { event.preventDefault(); $('main-content').focus(); return; }
   if (el.dataset.view) showView(el.dataset.view);
   if (el.classList.contains('brand')) { event.preventDefault(); showView('overview'); }
   if (el.dataset.category || el.dataset.merchant) {
@@ -386,7 +429,8 @@ $('export-button').addEventListener('click', () => {
 
 $('balance-date').value = saved.fields?.['balance-date'] || today;
 for (const id of ['cash', 'savings', 'buffer', 'adjustment', 'one-off']) if (saved.fields?.[id] !== undefined) $(id).value = saved.fields[id];
-showView(location.hash.slice(1) || 'overview', false);
+if (!location.hash || location.hash !== routeHash(currentRoute)) history.replaceState(null, '', routeHash(currentRoute));
+activateRoute(currentRoute, { scroll: false });
 try { await loadLocal(); } catch (error) { handleError(error); }
 let resizeTimeout;
 window.addEventListener('resize', () => { clearTimeout(resizeTimeout); resizeTimeout = setTimeout(() => { if (!state.data) return; if (state.view === 'overview') renderOverview(); if (state.view === 'forecast') renderForecast(); }, 100); });
