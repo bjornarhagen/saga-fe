@@ -1,0 +1,10 @@
+# A built local runtime, using the same loopback port and private ledger volume.
+services:
+  app:
+    build:
+      target: runtime
+    volumes: !override
+      - saga-fe-data:/var/lib/saga-fe
+    environment:
+      TRANSACTIONS_FILE: ""
+      DATABASE_PATH: /var/lib/saga-fe/saga-fe.sqlite

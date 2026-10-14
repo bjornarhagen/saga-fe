@@ -1,0 +1,113 @@
+/* ============================================================
+   Theme: bjornarhagen — the flagship (ADR-013).
+   Ported from the owner's design system
+   (bjornarhagen.no src/styles/global.css); source hue names map
+   onto Saga's semantic slots: amber → --accent, crimson →
+   --accent-2. Dark is the design as drawn; light is inverted
+   surfaces with the same accents.
+   Selected via <html data-theme="bjornarhagen">; light/dark via
+   data-mode (src/layouts/Base.astro).
+   ============================================================ */
+
+[data-theme="bjornarhagen"] {
+  /* surfaces (light) */
+  --bg: #f3f1ec;
+  --bg-1: #ebe9e2;
+  --bg-2: #e3e0d7;
+  --panel: #dcd9cf;
+  --panel-2: #d3d0c5;
+  --hairline: #cfcdc4;
+  --border: #b8b6ad;
+  --border-strong: #8a8780;
+  --rule-line: #cfcdc4;
+
+  /* ink (light) */
+  --fg: #161614;
+  --fg-1: #2c2c2a;
+  --fg-dim: #5a5853;
+  --fg-muted: #8a8780;
+  --fg-faint: #b0aea5;
+
+  /* accents — the owner's logo hues. The light-mode amber is nudged
+     one step darker than the logo's #c97a1d (2.96:1 on this bg) to
+     clear the 3:1 status/accent bar ADR-013's contrast guardrail
+     demands; dark mode below keeps the design as drawn. */
+  --accent: #c0741b;
+  /* Interactive TEXT — links, breadcrumbs, tree rows, ::selection — needs the
+     4.5:1 body bar, not the 3:1 UI bar the accent above is tuned to. The same
+     amber one further step darker measures 4.93:1 on --bg and 4.58:1 on
+     --bg-1, where --accent measures 3.23:1 and 3.00:1. Dark mode's accent
+     already clears the text bar, so it keeps the design as drawn. */
+  --link: #985912;
+  --accent-dim: #a36014;
+  --accent-2: #b8281f;
+  --accent-2-dim: #841c15;
+
+  /* status */
+  --ok: #4a8a32;
+  --warn: #c0741b;
+  --err: #b8281f;
+
+  /* Foreground for filled primary controls. */
+  --button-ink: var(--fg);
+
+  /* type families */
+  --theme-font-display: "Pirata One", "UnifrakturCook", serif;
+  --theme-font-mono:
+    "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --theme-font-body: "IBM Plex Sans", system-ui, -apple-system, sans-serif;
+
+  /* flavor layer (ADR-013 amendment): terminal ASCII / hacker motifs */
+  --flavor-grid-line: rgba(0, 0, 0, 0.025);
+  --flavor-bullet: "›";
+  --flavor-sep: "/";
+  --flavor-arrow: "→";
+  --ornament-divider: repeating-linear-gradient(
+    90deg,
+    var(--border) 0 8px,
+    transparent 8px 16px
+  );
+  --ornament-corner: url("/ornaments/corner-large.svg");
+  --ornament-corner-small: url("/ornaments/corner-small.svg");
+  --ornament-separator: url("/ornaments/separator.svg");
+  --ornament-mark: url("/ornaments/header-mark.svg");
+  --ornament-header: none;
+  /* Ratio is reserved for optional future artwork; the dashboard uses
+     compact SVG motifs instead of a large header engraving. */
+  --ornament-header-ratio: 3.0848;
+  --ornament-divider-cap: "+";
+}
+
+[data-theme="bjornarhagen"][data-mode="dark"] {
+  --button-ink: var(--bg);
+  /* surfaces — the exact design palette */
+  --bg: #0a0a0a;
+  --bg-1: #111111;
+  --bg-2: #161616;
+  --panel: #1a1a1a;
+  --panel-2: #202020;
+  --hairline: #242424;
+  --border: #2c2c2c;
+  --border-strong: #3a3a3a;
+  --rule-line: #1f1f1f;
+
+  /* ink */
+  --fg: #e8e6e1;
+  --fg-1: #c5c2bb;
+  --fg-dim: #8a8780;
+  --fg-muted: #5a5853;
+  --fg-faint: #3a3935;
+
+  /* accents */
+  --accent: #e89a3c;
+  --link: var(--accent);
+  --accent-dim: #b87520;
+  --accent-2: #d63a2f;
+  --accent-2-dim: #9a2820;
+
+  --ok: #6aa84f;
+  --warn: #e89a3c;
+  --err: #d63a2f;
+
+  --flavor-grid-line: rgba(255, 255, 255, 0.012);
+}

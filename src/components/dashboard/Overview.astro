@@ -1,0 +1,15 @@
+<section id="overview-view" class="view">
+  <header class="page-heading"><div><p class="eyebrow">01 / FINANCIAL OVERVIEW</p><h1>Your money, in view.</h1><p class="subtitle">See where it goes. Make room for what comes next.</p></div><label class="period-control">Period<select id="period"><option value="3">Last 3 complete months</option><option value="1">Last complete month</option><option value="6">Last 6 complete months</option><option value="12">Last 12 complete months</option><option value="current">This month so far</option><option value="all">All history</option><option value="custom">Custom dates</option></select></label></header>
+  <div id="custom-range" class="custom-range" hidden><label>From<input id="range-start" type="date"></label><label>Through<input id="range-end" type="date"></label></div>
+  <div class="period-caption" id="period-caption"></div>
+  <div id="metrics" class="metrics"></div>
+  <div class="overview-grid">
+    <article class="card cashflow-card"><div class="card-heading"><div><p class="eyebrow">THE BIG PICTURE</p><h2>Money in, money out</h2></div><div class="legend"><span><i class="in"></i> In</span><span><i class="out"></i> Out</span></div></div><div id="cashflow-chart" class="chart"></div><p class="chart-note">Out includes spending and transfers to savings outside the export. Transfers between named accounts are excluded.</p></article>
+    <article class="outlook-card"><span class="pill">LOOKING AHEAD</span><h2 id="outlook-title"></h2><p id="outlook-copy"></p><div class="outlook-rule"></div><p class="outlook-small" id="outlook-basis"></p><button class="light-button" data-view="forecast">Explore your forecast <span>↗</span></button></article>
+  </div>
+  <div class="detail-grid">
+    <article class="card"><div class="card-heading"><div><p class="eyebrow">WHERE IT GOES</p><h2>Spending by category</h2></div><span class="muted small">Click to explore</span></div><div id="categories"></div></article>
+    <article class="card"><div class="card-heading"><div><p class="eyebrow">THE EVERYDAY DETAILS</p><h2>Top places & payments</h2></div></div><div id="merchants"></div></article>
+  </div>
+  <article class="review-banner" id="review-banner"><div><strong id="review-title"></strong><p>Some transfers and uncategorized payments need a closer look. You can correct them and mark one-off payments.</p></div><button id="review-button" class="outline-button">Review transactions →</button></article>
+</section>

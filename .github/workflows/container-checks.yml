@@ -1,0 +1,78 @@
+name: Container checks and publication
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: container-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  checks:
+    name: Container runtime
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build development toolchain
+        run: docker build --target development -t saga-fe:checks .
+      - name: Check public source privacy
+        run: docker run --rm -v "$PWD:/source:ro" -w /source saga-fe:checks node scripts/privacy-check.mjs
+      - name: Test with synthetic data
+        run: docker run --rm saga-fe:checks npm test
+      - name: Build production image
+        run: docker build --target runtime -t saga-fe:ci .
+      - name: Verify restricted runtime and authentication boundary
+        run: python3 deploy/check-container.py saga-fe:ci
+
+  publish:
+    name: Publish container image
+    needs: checks
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Check out verified source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build production image
+        env:
+          SOURCE_URL: https://github.com/${{ github.repository }}
+          REVISION: ${{ github.sha }}
+        run: |
+          docker build --target runtime -t saga-fe:publish \
+            --label "org.opencontainers.image.source=$SOURCE_URL" \
+            --label "org.opencontainers.image.revision=$REVISION" .
+      - name: Verify the image being published
+        run: python3 deploy/check-container.py saga-fe:publish
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish immutable image
+        env:
+          REPOSITORY: ${{ github.repository }}
+          REVISION: ${{ github.sha }}
+        run: |
+          image="ghcr.io/$(printf '%s' "$REPOSITORY" | tr '[:upper:]' '[:lower:]')"
+          docker tag saga-fe:publish "$image:sha-$REVISION"
+          docker push "$image:sha-$REVISION"
+          reference=$(docker image inspect "$image:sha-$REVISION" --format '{{index .RepoDigests 0}}')
+          printf 'Published image: %s\n\nPromotion into private GitOps is a separate reviewed deployment.\n' "$reference" >> "$GITHUB_STEP_SUMMARY"

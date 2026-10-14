@@ -1,0 +1,12 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: tailscale-saga-fe
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: tailscale-saga-fe
+  policyTypes: [Ingress]
+  # Userspace Tailscale accepts encrypted tailnet traffic over outbound
+  # connections. No Kubernetes-facing listener is needed.
+  ingress: []

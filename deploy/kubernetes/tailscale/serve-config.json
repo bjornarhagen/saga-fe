@@ -1,0 +1,12 @@
+{
+  "TCP": {
+    "443": { "HTTPS": true }
+  },
+  "Web": {
+    "${TS_CERT_DOMAIN}:443": {
+      "Handlers": {
+        "/": { "Proxy": "http://saga-fe.saga-fe.svc.cluster.local:4321" }
+      }
+    }
+  }
+}

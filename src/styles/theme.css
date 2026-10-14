@@ -1,0 +1,6 @@
+/* Saga theme entry point. Palette, font and motif values belong in themes/;
+   dashboard.css supplies the shared structure. Add a theme here and in
+   src/scripts/themes.js without branching in dashboard components. */
+@import "./themes/bjornarhagen.css";
+@import "./themes/girlypop.css";
+@import "./themes/matrix.css";

@@ -1,0 +1,349 @@
+import { createAccountController } from './accounts.js';
+import { applyOverrides, summarize, monthlySeries, baseline, project, shiftMonth } from '../lib/engine.js';
+
+const $ = id => document.getElementById(id);
+const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const number = new Intl.NumberFormat('nb-NO', { maximumFractionDigits: 0 });
+const money = cents => number.format(cents / 100) + ' kr';
+const shortMoney = cents => Math.abs(cents) >= 100000000 ? (cents / 100000000).toFixed(1) + 'm' : Math.abs(cents) >= 100000 ? number.format(cents / 100000) + 'k' : number.format(cents / 100);
+const dateText = date => new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' }).format(new Date(date + 'T12:00:00Z'));
+const monthText = (month, long = false) => new Intl.DateTimeFormat('en-GB', { month: long ? 'long' : 'short', year: 'numeric', timeZone: 'UTC' }).format(new Date(month + '-01T12:00:00Z'));
+const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Oslo', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+const palette = Array.from({ length: 8 }, (_, i) => `var(--chart-${i + 1})`);
+const storageKey = 'saga-fe-local-v1';
+let saved = {};
+try { saved = JSON.parse(localStorage.getItem(storageKey) || localStorage.getItem('tally-local-v1') || '{}'); } catch { /* A fresh session works without storage. */ }
+const state = { data: null, transactions: [], view: 'overview', page: 0, horizon: saved.horizon || 3, lookback: saved.lookback || 3, overrides: saved.overrides || {}, assumptions: saved.assumptions || {}, editId: null, imported: false, scenario: saved.scenario || 'same', balanceSource: saved.balanceSource || 'manual' };
+let toastTimeout;
+function toast(message) { $('toast').textContent = message; $('toast').hidden = false; clearTimeout(toastTimeout); toastTimeout = setTimeout(() => { $('toast').hidden = true; }, 4500); }
+let loaded = false, saveTimer, saveChain = Promise.resolve();
+async function api(path, options = {}) {
+  const response = await fetch(path, { ...options, headers: { ...(options.body !== undefined ? { 'Content-Type': 'application/json' } : {}), ...options.headers }, ...(options.body !== undefined ? { body: JSON.stringify(options.body) } : {}) });
+  const result = await response.json();
+  if (response.status === 401) location.assign('/login');
+  if (!response.ok) throw new Error(result.error || 'The ledger could not be updated.');
+  return result;
+}
+function currentSettings() {
+  return { fields: Object.fromEntries(['cash', 'savings', 'buffer', 'balance-date', 'adjustment', 'one-off'].map(id => [id, $(id).value])), horizon: state.horizon, lookback: state.lookback, assumptions: state.assumptions, scenario: state.scenario, balanceSource: state.balanceSource };
+}
+function applySettings(settings) {
+  if (!settings) return;
+  state.horizon = settings.horizon || 3; state.lookback = settings.lookback || 3; state.assumptions = settings.assumptions || {}; state.scenario = settings.scenario || 'same'; state.balanceSource = settings.balanceSource || 'manual';
+  for (const id of ['cash', 'savings', 'buffer', 'balance-date', 'adjustment', 'one-off']) if (settings.fields?.[id] !== undefined) $(id).value = settings.fields[id];
+}
+function persist() {
+  const settings = currentSettings();
+  try { localStorage.setItem(storageKey, JSON.stringify({ ...settings, overrides: state.overrides })); } catch { /* The database remains authoritative. */ }
+  if (!loaded) return;
+  clearTimeout(saveTimer);
+  if (Object.values(state.assumptions).some(value => !Number.isSafeInteger(value)) || ['cash', 'savings', 'buffer', 'balance-date', 'adjustment', 'one-off'].some(id => !$(id).validity.valid)) { $('save-status').textContent = 'Check inputs to save'; return; }
+  $('save-status').textContent = 'Saving…';
+  saveTimer = setTimeout(() => {
+    saveChain = saveChain.catch(() => {}).then(() => api('/api/settings', { method: 'PUT', body: { settings } })).then(() => { $('save-status').textContent = 'Saved'; }).catch(error => { $('save-status').textContent = 'Not saved'; toast(error.message); });
+  }, 500);
+}
+const accountController = createAccountController({ api, money, today, onChange: () => loadLocal(), onUse: () => { state.balanceSource = 'accounts'; renderForecast(); persist(); showView('forecast'); }, onError: handleError, toast });
+function syncAccountStartingPoint() {
+  $('balance-source').value = state.balanceSource;
+  for (const id of ['cash', 'savings', 'balance-date']) $(id).readOnly = state.balanceSource === 'accounts';
+  if (state.balanceSource !== 'accounts') { $('balance-source-note').textContent = 'Combined starting balances are saved in your private ledger. Account snapshots remain unchanged.'; return true; }
+  const starting = accountController.startingPoint();
+  $('balance-source-note').textContent = starting.ready ? 'Starting point follows the included account balances. Change them in Accounts.' : starting.reason;
+  if (starting.ready) { $('cash').value = (starting.cash / 100).toFixed(2); $('savings').value = (starting.savings / 100).toFixed(2); $('balance-date').value = starting.date; }
+  else { $('cash').value = ''; $('savings').value = ''; }
+  return starting.ready;
+}
+function showView(view, scroll = true) {
+  if (!['overview', 'forecast', 'transactions', 'accounts', 'data'].includes(view)) view = 'overview';
+  state.view = view;
+  document.querySelectorAll('.view').forEach(el => { el.hidden = el.id !== view + '-view'; });
+  document.querySelectorAll('.nav').forEach(el => {
+    el.classList.toggle('active', el.dataset.view === view);
+    if (el.dataset.view === view) el.setAttribute('aria-current', 'page');
+    else el.removeAttribute('aria-current');
+  });
+  $('topbar-view').textContent = { overview: 'Overview', forecast: 'Look ahead', transactions: 'Transactions', accounts: 'Accounts', data: 'Data & method' }[view];
+  history.replaceState(null, '', '#' + view);
+  if (state.data && view === 'forecast') renderForecast();
+  if (state.data && view === 'overview') renderOverview();
+  if (scroll) window.scrollTo({ top: 0, behavior: 'instant' });
+}
+function range() {
+  const endMonth = (state.data.metadata.lastDate || today).slice(0, 7);
+  const choice = $('period').value;
+  if (choice === 'all') return { start: state.data.metadata.firstDate || today, end: state.data.metadata.lastDate || today };
+  if (choice === 'current') return { start: endMonth + '-01', end: state.data.metadata.lastDate || today };
+  if (choice === 'custom') return { start: $('range-start').value || state.data.metadata.firstDate || today, end: $('range-end').value || state.data.metadata.lastDate || today };
+  const end = shiftMonth(endMonth, -1);
+  return { start: shiftMonth(end, 1 - Number(choice)) + '-01', end: new Date(Date.UTC(Number(end.slice(0, 4)), Number(end.slice(5, 7)), 0)).toISOString().slice(0, 10) };
+}
+function selectedTransactions() { const r = range(); return state.transactions.filter(t => t.date >= r.start && t.date <= r.end); }
+function recalculate() {
+  state.transactions = applyOverrides(state.data.transactions, state.overrides);
+  state.base = state.transactions.length ? baseline(state.transactions, state.data.metadata.lastDate, state.lookback, state.data.metadata.firstDate) : { start: today.slice(0, 7), end: today.slice(0, 7), months: 0, income: 0, expense: 0, saving: 0 };
+  renderOverview(); renderForecast(); renderTransactions(); renderData();
+}
+function renderOverview() {
+  const r = range(); const tx = selectedTransactions(); const s = summarize(tx);
+  $('custom-range').hidden = $('period').value !== 'custom';
+  $('period-caption').textContent = r.start > r.end ? 'Choose an end date on or after the start date.' : `${dateText(r.start)} – ${dateText(r.end)} · ${number.format(tx.length)} transactions · Period totals`;
+  const metrics = [
+    ['Money in', s.income, 'Salary and other incoming money', '↙', ''],
+    ['Spending', s.expense, 'Bills, purchases & other outflows', '↗', ''],
+    ['External savings', s.saving, 'Money moved outside this export', '⊞', ''],
+    ['Cash change', s.net, 'Money in − spending − external savings', '≈', s.net < 0 ? 'negative' : 'positive']
+  ];
+  $('metrics').innerHTML = metrics.map(([label, amount, note, icon, color]) => `<article class="metric"><div class="metric-label">${label}<span class="metric-icon" aria-hidden="true">${icon}</span></div><div class="metric-value ${color}">${number.format(amount / 100)}<span class="unit">kr</span></div><div class="metric-note">${note}</div></article>`).join('');
+  $('cashflow-chart').innerHTML = r.start <= r.end ? barChart(monthlySeries(tx, r.start.slice(0, 7), r.end.slice(0, 7))) : '<p class="no-results">No months in this date range.</p>';
+  const b = state.base; const net = b.income - b.expense - b.saving;
+  $('outlook-title').textContent = b.months ? net < 0 ? 'Your current pace uses more cash.' : 'Your current pace leaves some room.' : 'A little more history is needed.';
+  $('outlook-copy').textContent = b.months ? `${money(Math.abs(net))} ${net < 0 ? 'less' : 'more'} available cash per month, if recent regular income and outflows continue.` : 'There are no complete months to estimate a baseline. Enter your monthly assumptions in Look ahead.';
+  $('outlook-basis').textContent = b.months ? `Based on ${monthText(b.start)}–${monthText(b.end)}. Enter your cash balance to see what that means for you.` : 'Current account balances are not included in the export.';
+  const categories = Object.entries(s.categories).sort((a, b) => b[1] - a[1]);
+  $('categories').innerHTML = categories.length ? categories.slice(0, 8).map(([name, amount], i) => `<button class="category-row" data-category="${esc(name)}"><div class="category-top"><span class="category-name"><i class="category-dot" style="background:${palette[i]}"></i>${esc(name)}</span><span class="category-amount">${money(amount)}<span class="category-share">${number.format(amount / s.expense * 100)}%</span></span></div><div class="bar-track"><div class="bar-fill" style="width:${amount / s.expense * 100}%;background:${palette[i]}"></div></div></button>`).join('') + (categories.length > 8 ? `<p class="input-note">${money(categories.slice(8).reduce((sum, x) => sum + x[1], 0))} in ${categories.length - 8} other categories. Explore all in Transactions.</p>` : '') : '<p class="no-results">No spending in this period.</p>';
+  const merchants = Object.entries(s.merchants).sort((a, b) => b[1] - a[1]).slice(0, 6);
+  $('merchants').innerHTML = merchants.length ? merchants.map(([name, amount]) => {
+    const matches = tx.filter(t => t.description === name && t.amount < 0 && t.kind === 'expense');
+    return `<button class="merchant-row" data-merchant="${esc(name)}"><span class="merchant-icon">${esc(name.replace(/^Fra: /, '').slice(0, 1).toUpperCase())}</span><span class="merchant-name">${esc(name)}<small>${matches.length} payment${matches.length !== 1 ? 's' : ''}</small></span><span class="merchant-amount">${money(amount)}</span></button>`;
+  }).join('') : '<p class="no-results">No payments in this period.</p>';
+  const review = state.transactions.filter(t => t.review).length;
+  $('review-title').textContent = `${number.format(review)} transactions could use your context`;
+  $('review-banner').hidden = review === 0;
+}
+function chartTicks(max, min = 0) {
+  const rough = (max - min || 100000) / 4;
+  const power = 10 ** Math.floor(Math.log10(rough));
+  const factor = [1, 2, 5, 10].find(n => n * power >= rough);
+  const step = factor * power;
+  const top = Math.max(step, Math.ceil(max / step) * step);
+  const bottom = Math.min(0, Math.floor(min / step) * step);
+  const values = []; for (let n = bottom; n <= top; n += step) values.push(n);
+  return { top, bottom, values };
+}
+function barChart(series) {
+  if (!series.length) return '<p class="no-results">No transactions in this period.</p>';
+  const w = Math.max(280, $('cashflow-chart').clientWidth || 760), h = 240, left = 42, right = 10, top = 15, bottom = 37;
+  const max = Math.max(...series.flatMap(m => [m.income, m.expense + m.saving]));
+  const ticks = chartTicks(max); const plotHeight = h - top - bottom;
+  const y = n => top + plotHeight * (1 - n / ticks.top);
+  const gap = (w - left - right) / series.length;
+  const bar = Math.min(23, gap * .28);
+  let svg = `<svg viewBox="0 0 ${w} ${h}" role="img" aria-label="Monthly incoming and outgoing cash in NOK"><title>Money in and out. Each pair of bars is one month; outgoing cash includes external savings.</title>`;
+  svg += ticks.values.map(n => `<line x1="${left}" x2="${w - right}" y1="${y(n)}" y2="${y(n)}" stroke="var(--chart-grid)"/><text x="${left - 9}" y="${y(n) + 3}" text-anchor="end" fill="var(--chart-label)" font-size="10">${shortMoney(n)}</text>`).join('');
+  const stride = Math.max(1, Math.ceil(series.length / Math.max(2, Math.floor(w / 85))));
+  svg += series.map((m, i) => {
+    const x = left + gap * (i + .5); const out = m.expense + m.saving;
+    return `<g><title>${monthText(m.month, true)}: in ${money(m.income)}, out ${money(out)}, cash change ${money(m.net)}</title><rect x="${x - bar - 2}" y="${y(m.income)}" width="${bar}" height="${plotHeight * m.income / ticks.top}" fill="var(--chart-in)"/><rect x="${x + 2}" y="${y(out)}" width="${bar}" height="${plotHeight * out / ticks.top}" fill="var(--chart-out)"/>${i % stride === 0 || i === series.length - 1 ? `<text x="${x}" y="${h - 12}" text-anchor="middle" fill="var(--chart-label)" font-size="10">${esc(monthText(m.month))}</text>` : ''}</g>`;
+  }).join('');
+  return svg + '</svg>';
+}
+function fieldCents(id, allowBlank = false) {
+  const input = $(id); const value = input.value.trim();
+  if (value === '') return allowBlank ? null : 0;
+  if (!input.validity.valid || !Number.isFinite(Number(value))) return NaN;
+  return Math.round(Number(value) * 100);
+}
+function activeAssumptions() {
+  return Object.fromEntries(['income', 'expense', 'saving'].map(key => [key, state.assumptions[key] ?? state.base[key]]));
+}
+function renderForecast() {
+  const accountBalancesReady = syncAccountStartingPoint();
+  const b = state.base, a = activeAssumptions();
+  if (state.scenario === 'less' || state.scenario === 'more') $('adjustment').value = ((state.scenario === 'less' ? -1 : 1) * a.expense / 1000).toFixed(2);
+  for (const key of ['income', 'expense', 'saving']) if (document.activeElement !== $(key)) $(key).value = (a[key] / 100).toFixed(2);
+  $('lookback').value = String(state.lookback);
+  $('baseline-caption').textContent = b.months ? `${monthText(b.start)}–${monthText(b.end)} · ${b.months} complete months. ${Object.keys(state.assumptions).length ? 'Custom amounts are active.' : 'Income uses salary rows only.'}` : 'No complete months available. Set all three monthly assumptions yourself.';
+  const cash = fieldCents('cash', true), savings = fieldCents('savings'), buffer = fieldCents('buffer'), adjustment = fieldCents('adjustment'), oneOff = fieldCents('one-off');
+  const balanceDate = $('balance-date').value;
+  document.querySelectorAll('[data-horizon]').forEach(el => { const active = Number(el.dataset.horizon) === state.horizon; el.classList.toggle('selected', active); el.setAttribute('aria-pressed', String(active)); });
+  document.querySelectorAll('[data-scenario]').forEach(el => { const active = el.dataset.scenario === state.scenario; el.classList.toggle('selected', active); el.setAttribute('aria-pressed', String(active)); });
+  const invalid = !accountBalancesReady || [cash ?? 0, savings, buffer, adjustment, oneOff, ...Object.values(a)].some(n => !Number.isFinite(n)) || !/^\d{4}-\d{2}-\d{2}$/.test(balanceDate) || a.expense + adjustment < 0 || (!b.months && ['income', 'expense', 'saving'].some(key => state.assumptions[key] === undefined));
+  const p = !invalid ? project({ cash, savings, buffer, ...a, adjustment, oneOff, horizon: state.horizon, asOf: balanceDate }) : null;
+  state.projection = p;
+  $('forecast-chart').innerHTML = p ? lineChart(cash, p, buffer, balanceDate) : `<div class="empty-state"><div class="empty-state-icon" aria-hidden="true">↗</div><h3>${invalid ? 'Check your assumptions.' : 'Start with what you have.'}</h3><p>${invalid ? 'Enter valid balances, a balance date, and nonnegative monthly amounts. A spending change cannot reduce total spending below zero. With no complete history, set all three monthly assumptions.' : 'Enter your available cash on the left. Then explore how your recent income and spending could shape the next few months.'}</p></div>`;
+  const net = a.income - a.expense - a.saving - adjustment;
+  $('forecast-stats').innerHTML = [
+    ['Monthly cash change', Number.isFinite(net) ? money(net) : '—', net < 0 ? 'negative' : 'positive'],
+    [`Cash after ${state.horizon} month${state.horizon === 1 ? '' : 's'}`, p ? money(p.endBalance) : '—', p?.endBalance < 0 ? 'negative' : ''],
+    ['Peak reserve needed', p ? money(p.reserveNeeded) : '—', p?.reserveNeeded > 0 ? 'negative' : '']
+  ].map(([label, value, color]) => `<div><div class="forecast-stat-label">${label}</div><div class="forecast-stat-value ${color}">${value}</div></div>`).join('');
+  $('forecast-message').classList.toggle('warning', !!p && (p.reserveNeeded > 0 || p.monthlyNet < 0));
+  if (!p) $('forecast-message').textContent = invalid ? 'Correct the inputs above to calculate a forecast.' : 'Your balances and assumptions are saved in your private ledger. Public source and images contain no financial data.';
+  else if (p.reserveNeeded > 0) $('forecast-message').textContent = `At the lowest monthly checkpoint, you would need ${money(p.reserveNeeded)} from your reserve to maintain your ${money(buffer)} buffer. ${p.uncovered > 0 ? `Your entered reserve falls short by ${money(p.uncovered)}.` : `Your reserve could cover it, leaving ${money(Math.max(0, savings - p.reserveNeeded))}.`} ${p.breakEvenCut > 0 ? `Reducing monthly outflows by ${money(p.breakEvenCut)} would stop the ongoing cash decline.` : ''}`;
+  else if (p.monthlyNet < 0) $('forecast-message').textContent = `Your cash is decreasing by ${money(-p.monthlyNet)} per month. Your starting cash covers this ${state.horizon}-month scenario, with ${money(p.headroom)} above your chosen buffer at the end. Reducing monthly outflows by ${money(p.breakEvenCut)} would stop the ongoing cash decline.`;
+  else $('forecast-message').textContent = `This scenario ends ${money(p.headroom)} above your chosen buffer. Monthly cash ${p.monthlyNet === 0 ? 'stays level' : `grows by ${money(p.monthlyNet)}`}. This is end-of-period headroom; payment timing within the month is not modeled.`;
+  $('forecast-table').innerHTML = p ? `<div class="table-scroll"><table><thead><tr><th>Date</th><th class="numeric">Cash change</th><th class="numeric">Available cash*</th><th class="numeric">Reserve needed*</th></tr></thead><tbody>${p.points.map((point, i) => `<tr><td>${dateText(point.date)}</td><td class="numeric ${p.monthlyNet - (i === 0 ? oneOff : 0) < 0 ? 'negative' : 'positive'}">${money(p.monthlyNet - (i === 0 ? oneOff : 0))}</td><td class="numeric ${point.balance < 0 ? 'negative' : ''}">${money(point.balance)}</td><td class="numeric">${money(point.reserveNeeded)}</td></tr>`).join('')}</tbody></table></div><p class="input-note">*Cash before drawing from savings. Reserve needed is cumulative to restore the buffer at each date. Negative cash shows a shortfall. Do not add the reserve-needed rows together.</p>` : '<p class="no-results">Your monthly estimates will appear once your starting balance is entered.</p>';
+}
+function lineChart(cash, projection, buffer, balanceDate) {
+  const points = [{ date: balanceDate, balance: cash }, ...projection.points];
+  const w = Math.max(280, $('forecast-chart').clientWidth || 740), h = 280, left = 43, right = 30, top = 28, bottom = 40;
+  const ticks = chartTicks(Math.max(cash, ...points.map(p => p.balance), buffer), Math.min(0, ...points.map(p => p.balance)));
+  const y = n => top + (h - top - bottom) * (ticks.top - n) / (ticks.top - ticks.bottom);
+  const x = i => left + (w - left - right) * i / (points.length - 1);
+  const line = points.map((p, i) => `${i ? 'L' : 'M'}${x(i)},${y(p.balance)}`).join(' ');
+  const color = projection.endBalance < buffer ? 'var(--chart-warning)' : 'var(--chart-positive)';
+  return `<svg viewBox="0 0 ${w} ${h}" role="img" aria-label="Projected available cash in NOK"><title>Cash projection: starts at ${money(cash)}, ends at ${money(projection.endBalance)}. Buffer ${money(buffer)}.</title><defs><linearGradient id="forecast-fill" x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stop-color="${color}" stop-opacity=".12"/><stop offset="100%" stop-color="${color}" stop-opacity=".01"/></linearGradient></defs>${ticks.values.map(n => `<line x1="${left}" x2="${w - right}" y1="${y(n)}" y2="${y(n)}" stroke="${n === 0 ? 'var(--border-strong)' : 'var(--chart-grid)'}"/><text x="${left - 10}" y="${y(n) + 3}" text-anchor="end" fill="var(--chart-label)" font-size="10">${shortMoney(n)}</text>`).join('')}<path d="${line} L${x(points.length - 1)},${y(ticks.bottom)} L${x(0)},${y(ticks.bottom)} Z" fill="url(#forecast-fill)"/><line x1="${left}" x2="${w - right}" y1="${y(buffer)}" y2="${y(buffer)}" stroke="var(--border-strong)" stroke-dasharray="5 5"/><text x="${w - right}" y="${y(buffer) - 7}" text-anchor="end" fill="var(--chart-label)" font-size="10">Buffer ${money(buffer)}</text><path d="${line}" stroke="${color}" stroke-width="2.5" fill="none" stroke-linejoin="round"/>${points.map((p, i) => `<g><title>${dateText(p.date)}: ${money(p.balance)}</title><circle cx="${x(i)}" cy="${y(p.balance)}" r="5" fill="var(--bg-1)" stroke="${color}" stroke-width="2"/><text x="${x(i)}" y="${h - 14}" text-anchor="middle" fill="var(--chart-label)" font-size="10">${i ? dateText(p.date).replace(/ \d{4}$/, '') : 'Starting cash'}</text></g>`).join('')}</svg>`;
+}
+function filteredTransactions() {
+  const query = $('search').value.toLocaleLowerCase().trim();
+  const category = $('category-filter').value, kind = $('kind-filter').value;
+  const tx = $('transaction-period').value === 'all' ? state.transactions : selectedTransactions();
+  const result = tx.filter(t => (!query || `${t.description} ${t.category} ${t.subcategory} ${t.account}`.toLocaleLowerCase().includes(query)) && (!category || t.category === category) && (!kind || t.kind === kind) && (!$('review-only').checked || t.review) && (!$('excluded-only').checked || t.excludeForecast));
+  const sort = $('transaction-sort').value;
+  return result.sort((a, b) => sort === 'outflow' ? a.amount - b.amount : sort === 'inflow' ? b.amount - a.amount : sort === 'oldest' ? a.date.localeCompare(b.date) : b.date.localeCompare(a.date));
+}
+function renderTransactions() {
+  const categories = [...new Set(state.transactions.map(t => t.category))].sort();
+  const previous = $('category-filter').value;
+  $('category-filter').innerHTML = '<option value="">All categories</option>' + categories.map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join('');
+  $('category-filter').value = categories.includes(previous) ? previous : '';
+  const tx = filteredTransactions(); const perPage = 40;
+  state.page = Math.max(0, Math.min(state.page, Math.ceil(tx.length / perPage) - 1));
+  const shown = tx.slice(state.page * perPage, (state.page + 1) * perPage);
+  $('transaction-count').textContent = `${number.format(tx.length)} matches`;
+  const kindLabels = { expense: 'Spending', income: 'Money in', saving: 'Savings', transfer: 'Transfer' };
+  $('transaction-rows').innerHTML = shown.length ? shown.map(t => `<tr><td>${dateText(t.date)}<small>${esc(t.account || 'Unknown account')}</small></td><td>${esc(t.description)}${t.review ? '<small class="review-tag">● Needs review</small>' : ''}${t.excludeForecast ? '<small>One-off · excluded from forecast</small>' : ''}</td><td>${esc(t.category)}<small>${esc(t.subcategory)}</small></td><td><span class="badge ${t.kind}">${kindLabels[t.kind]}</span></td><td class="numeric ${t.amount > 0 ? 'positive' : ''}">${t.amount > 0 ? '+' : ''}${money(t.amount)}</td><td><button class="edit-button" data-edit="${t.id}" aria-label="Review ${esc(t.description)}">Edit</button></td></tr>`).join('') : '<tr><td colspan="6" class="no-results">No transactions match these filters.</td></tr>';
+  $('page-label').textContent = tx.length ? `${state.page * perPage + 1}–${Math.min((state.page + 1) * perPage, tx.length)} of ${number.format(tx.length)}` : '0 transactions';
+  $('previous-page').disabled = state.page === 0;
+  $('next-page').disabled = (state.page + 1) * perPage >= tx.length;
+  $('category-options').innerHTML = categories.map(c => `<option value="${esc(c)}">`).join('');
+}
+function renderData() {
+  const m = state.data.metadata;
+  const info = [['Source', 'Private SQLite ledger'], ['Date range', m.firstDate ? `${dateText(m.firstDate)} – ${dateText(m.lastDate)}` : 'No transactions imported'], ['Rows', number.format(m.rows)], ['Internal transfer rows', number.format(state.transactions.filter(t => t.kind === 'transfer').length)], ['Repeated identical rows retained', number.format(m.duplicateRows)], ['Zero-amount rows', number.format(m.zeroRows)], ['Dated account balances', `${(state.data.accountDetails || []).filter(a => a.balance !== null).length} set`], ['Ingest sources', number.format(m.sources || 0)], ['Import batches', number.format(m.batches || 0)], ['Saved transaction edits', number.format(Object.keys(state.overrides).length)]];
+  $('data-details').innerHTML = `<div class="data-list">${info.map(([key, value]) => `<div class="data-item"><span>${key}</span><strong>${esc(value)}</strong></div>`).join('')}</div>`;
+  $('account-details').innerHTML = state.data.accounts.map(name => `<div class="account-item"><span class="account-symbol" aria-hidden="true">⊞</span>${esc(name)}</div>`).join('');
+  $('data-status').textContent = m.lastDate ? `${number.format(m.rows)} rows · Through ${dateText(m.lastDate)}` : 'No data yet · Import a CSV or JSON file';
+  $('footer-date').textContent = m.lastDate ? `Through ${dateText(m.lastDate)}` : 'Awaiting first import';
+}
+function editTransaction(id) {
+  const tx = state.transactions.find(t => t.id === id); if (!tx) return;
+  state.editId = id;
+  $('edit-description').textContent = tx.description;
+  $('edit-meta').textContent = `${dateText(tx.date)} · ${money(tx.amount)} · ${tx.account || 'Unknown account'}`;
+  $('edit-kind').value = tx.kind; $('edit-category').value = tx.category; $('edit-exclude').checked = !!tx.excludeForecast;
+  // Preserve cash direction while still allowing either direction to be an internal transfer.
+  for (const option of $('edit-kind').options) option.disabled = tx.amount > 0 ? ['expense', 'saving'].includes(option.value) : tx.amount < 0 ? option.value === 'income' : false;
+  $('edit-dialog').showModal();
+}
+function clearFilters() { $('search').value = ''; $('category-filter').value = ''; $('kind-filter').value = ''; $('review-only').checked = false; $('excluded-only').checked = false; $('transaction-sort').value = 'newest'; state.page = 0; }
+async function loadLocal() {
+  const payload = await api('/api/transactions');
+  if (!loaded) {
+    if (payload.settings === null && Object.keys(saved).length) {
+      const migrated = { ...currentSettings(), ...(saved.fields ? { fields: saved.fields } : {}), ...(saved.balanceSource ? { balanceSource: saved.balanceSource } : {}) };
+      try { await api('/api/settings', { method: 'PUT', body: { settings: migrated } }); payload.settings = migrated; } catch { /* Invalid legacy inputs stay local until corrected. */ }
+      if (Object.keys(saved.overrides || {}).length) {
+        const result = await api('/api/overrides', { method: 'PUT', body: { overrides: { ...saved.overrides, ...payload.overrides } } }); payload.overrides = result.overrides;
+      }
+    }
+    applySettings(payload.settings);
+  }
+  state.data = payload; state.overrides = payload.overrides || {}; state.imported = false;
+  accountController.setData(payload.accountDetails || []);
+  loaded = true; initializeData();
+  try {
+    const history = await api('/api/ingest');
+    $('ingest-history').innerHTML = history.batches.length ? '<h3>Recent imports</h3>' + history.batches.slice(0, 8).map(batch => `<div class="data-item"><span>${esc(batch.adapter)} · ${esc(batch.importedAt.slice(0, 10))}</span><strong>${batch.inserted} added · ${batch.existing} existing</strong></div>`).join('') : '<p class="input-note">No imports yet.</p>';
+  } catch { /* Transaction and account data remains usable. */ }
+}
+function initializeData() {
+  $('range-start').value ||= state.data.metadata.firstDate || today; $('range-end').value = state.data.metadata.lastDate || today;
+  state.page = 0;
+  $('content').hidden = false; $('loading').hidden = true; $('error').hidden = true; recalculate();
+}
+function handleError(error) { $('error').textContent = error.message; $('error').hidden = false; $('loading').hidden = true; }
+
+document.addEventListener('click', event => {
+  const el = event.target.closest('button, a'); if (!el) return;
+  if (el.dataset.view) showView(el.dataset.view);
+  if (el.classList.contains('brand')) { event.preventDefault(); showView('overview'); }
+  if (el.dataset.category || el.dataset.merchant) {
+    clearFilters(); $('transaction-period').value = 'selected';
+    if (el.dataset.category) $('category-filter').value = el.dataset.category;
+    if (el.dataset.merchant) $('search').value = el.dataset.merchant;
+    renderTransactions(); showView('transactions');
+  }
+  if (el.dataset.edit) editTransaction(el.dataset.edit);
+  if (el.dataset.horizon) { state.horizon = Number(el.dataset.horizon); renderForecast(); persist(); }
+  if (el.dataset.scenario) {
+    state.scenario = el.dataset.scenario;
+    const expense = activeAssumptions().expense;
+    $('adjustment').value = (state.scenario === 'less' ? -expense * .1 / 100 : state.scenario === 'more' ? expense * .1 / 100 : 0).toFixed(2);
+    renderForecast(); persist();
+  }
+});
+$('period').addEventListener('change', () => { state.page = 0; renderOverview(); renderTransactions(); });
+for (const id of ['range-start', 'range-end']) $(id).addEventListener('change', () => { state.page = 0; renderOverview(); renderTransactions(); });
+for (const id of ['search', 'category-filter', 'kind-filter', 'transaction-period', 'transaction-sort', 'review-only', 'excluded-only']) $(id).addEventListener(id === 'search' ? 'input' : 'change', () => { state.page = 0; renderTransactions(); });
+$('clear-filters').addEventListener('click', () => { clearFilters(); renderTransactions(); });
+$('previous-page').addEventListener('click', () => { state.page--; renderTransactions(); });
+$('next-page').addEventListener('click', () => { state.page++; renderTransactions(); });
+$('review-button').addEventListener('click', () => { clearFilters(); $('review-only').checked = true; $('transaction-period').value = 'all'; renderTransactions(); showView('transactions'); });
+$('large-payments').addEventListener('click', () => { clearFilters(); $('transaction-period').value = 'selected'; $('kind-filter').value = 'expense'; $('transaction-sort').value = 'outflow'; $('period').value = String(state.lookback); renderOverview(); renderTransactions(); showView('transactions'); });
+for (const id of ['cash', 'savings', 'buffer', 'balance-date', 'adjustment', 'one-off']) $(id).addEventListener('input', () => { if (id === 'adjustment') state.scenario = 'custom'; renderForecast(); persist(); });
+for (const id of ['income', 'expense', 'saving']) $(id).addEventListener('input', () => { state.assumptions[id] = fieldCents(id); if (id === 'expense') state.scenario = 'custom'; renderForecast(); persist(); });
+$('lookback').addEventListener('change', () => { state.lookback = Number($('lookback').value); state.assumptions = {}; recalculate(); persist(); });
+$('reset-baseline').addEventListener('click', () => { state.assumptions = {}; $('adjustment').value = '0'; state.scenario = 'same'; renderForecast(); persist(); toast('Monthly assumptions restored from your history.'); });
+$('close-dialog').addEventListener('click', () => $('edit-dialog').close());
+$('edit-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  const override = { kind: $('edit-kind').value, category: $('edit-category').value.trim(), excludeForecast: $('edit-exclude').checked };
+  if (!override.category) return;
+  try { const result = await api('/api/overrides', { method: 'PATCH', body: { id: state.editId, override } }); state.overrides = result.overrides; $('edit-dialog').close(); recalculate(); persist(); toast('Transaction updated in your ledger.'); } catch (error) { handleError(error); }
+});
+$('reset-transaction').addEventListener('click', async () => {
+  try { const result = await api('/api/overrides', { method: 'PATCH', body: { id: state.editId, override: null } }); state.overrides = result.overrides; $('edit-dialog').close(); recalculate(); persist(); toast('Original source classification restored.'); } catch (error) { handleError(error); }
+});
+$('import-button').addEventListener('click', () => $('csv-input').click());
+$('data-import-button').addEventListener('click', () => $('csv-input').click());
+$('csv-input').addEventListener('change', async () => {
+  const file = $('csv-input').files[0]; if (!file) return;
+  $('ingest-status').textContent = 'Importing…';
+  try {
+    if (file.size > 24 * 1024 * 1024) throw new Error('Choose a file smaller than 24 MiB.');
+    const selected = $('ingest-adapter').value;
+    const adapter = selected === 'auto' ? (/\.json$/i.test(file.name) ? 'canonical-v1' : 'norwegian-bank-csv') : selected;
+    const content = await file.text();
+    const data = adapter === 'canonical-v1' ? JSON.parse(content) : null;
+    const result = await api('/api/ingest', { method: 'POST', body: { adapter, filename: file.name, ...(adapter === 'canonical-v1' ? { data: data.data || data, ...(data.sourceKey ? { sourceKey: data.sourceKey } : {}) } : { content }) } });
+    clearFilters(); await loadLocal();
+    $('ingest-status').textContent = `${result.batch.inserted} transactions added; ${result.batch.existing} already in the ledger.`;
+    toast('Import saved in the private database.');
+  } catch (error) { $('ingest-status').textContent = 'Import failed. Existing data was preserved.'; handleError(error); }
+  $('csv-input').value = '';
+});
+$('reload-button').addEventListener('click', async () => { try { await loadLocal(); toast('Ledger refreshed from the database.'); } catch (error) { handleError(error); } });
+$('clear-saved').addEventListener('click', async () => {
+  if (!confirm('Reset forecast settings and transaction edits? Transactions and account balances remain in the ledger.')) return;
+  try {
+    state.overrides = (await api('/api/overrides', { method: 'PUT', body: { overrides: {} } })).overrides;
+    state.assumptions = {}; state.lookback = 3; state.horizon = 3; state.scenario = 'same'; state.balanceSource = 'manual';
+    for (const id of ['cash', 'savings', 'buffer']) $(id).value = '';
+    $('adjustment').value = '0'; $('one-off').value = '0'; $('balance-date').value = today;
+    recalculate(); persist(); toast('Forecast settings and transaction edits reset.');
+  } catch (error) { handleError(error); }
+});
+$('balance-source').addEventListener('change', () => { state.balanceSource = $('balance-source').value; renderForecast(); persist(); });
+$('export-button').addEventListener('click', () => {
+  const csvCell = value => '"' + String(value).replace(/^[=+@\-\t\r]/, "'$&").replace(/"/g, '""') + '"';
+  const rows = [['Date', 'Amount NOK', 'Description', 'Category', 'Subcategory', 'Kind', 'Account', 'Excluded from forecast'], ...filteredTransactions().map(t => [t.date, (t.amount / 100).toFixed(2), t.description, t.category, t.subcategory, t.kind, t.account, t.excludeForecast ? 'Yes' : 'No'])];
+  const csv = '\uFEFF' + rows.map((row, index) => row.map((value, i) => index > 0 && i === 1 ? value : csvCell(value)).join(';')).join('\r\n');
+  const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+  const a = document.createElement('a'); a.href = url; a.download = 'saga-fe-transactions.csv'; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+  toast('Filtered transactions exported.');
+});
+
+$('balance-date').value = saved.fields?.['balance-date'] || today;
+for (const id of ['cash', 'savings', 'buffer', 'adjustment', 'one-off']) if (saved.fields?.[id] !== undefined) $(id).value = saved.fields[id];
+showView(location.hash.slice(1) || 'overview', false);
+try { await loadLocal(); } catch (error) { handleError(error); }
+let resizeTimeout;
+window.addEventListener('resize', () => { clearTimeout(resizeTimeout); resizeTimeout = setTimeout(() => { if (!state.data) return; if (state.view === 'overview') renderOverview(); if (state.view === 'forecast') renderForecast(); }, 100); });
+$('sign-out')?.addEventListener('click', async () => {
+  try { await api('/api/session', { method: 'DELETE', body: {} }); location.assign('/login'); }
+  catch (error) { toast(error.message); }
+});
+
+window.addEventListener('saga:themechange', () => { if (!state.data) return; if (state.view === 'overview') renderOverview(); if (state.view === 'forecast') renderForecast(); });

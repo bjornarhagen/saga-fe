@@ -1,0 +1,17 @@
+---
+import DashboardLayout from '../layouts/DashboardLayout.astro';
+import Overview from '../components/dashboard/Overview.astro';
+import Forecast from '../components/dashboard/Forecast.astro';
+import Transactions from '../components/dashboard/Transactions.astro';
+import DataMethod from '../components/dashboard/DataMethod.astro';
+import TransactionDialog from '../components/dashboard/TransactionDialog.astro';
+import Accounts from '../components/dashboard/Accounts.astro';
+---
+<DashboardLayout>
+  <Overview />
+  <Forecast />
+  <Transactions />
+  <Accounts />
+  <DataMethod />
+  <TransactionDialog slot="dialog" />
+</DashboardLayout>

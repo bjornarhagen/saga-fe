@@ -1,0 +1,32 @@
+---
+import '../styles/fonts.css';
+import '../styles/theme.css';
+import '../styles/dashboard.css';
+---
+<!doctype html>
+<html lang="en" data-theme="bjornarhagen" data-mode="dark">
+  <head><meta charset="utf-8" /><meta name="viewport" content="width=device-width,initial-scale=1" /><title>Owner sign-in — Saga Fé</title><link rel="icon" href="/favicon.svg" type="image/svg+xml" /></head>
+  <body class="login-body">
+    <main class="login-panel card">
+      <p class="eyebrow">SAGA / FÉ / PRIVATE LEDGER</p><h1>For your eyes.</h1>
+      <p class="subtitle">Sign in to access your accounts and financial history.</p>
+      <form id="login-form"><label>Owner password<input id="owner-password" type="password" autocomplete="current-password" required maxlength="1024" /></label><button class="primary-button" type="submit">Unlock ledger →</button><p id="login-error" class="negative" role="alert" hidden></p></form>
+    </main>
+    <script>
+      const form = document.querySelector<HTMLFormElement>('#login-form')!;
+      form.addEventListener('submit', async event => {
+        event.preventDefault(); const input = document.querySelector<HTMLInputElement>('#owner-password')!;
+        const error = document.querySelector<HTMLParagraphElement>('#login-error')!;
+        const button = form.querySelector<HTMLButtonElement>('button')!;
+        button.disabled = true; error.hidden = true;
+        try {
+          const response = await fetch('/api/session', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password: input.value }) });
+          input.value = ''; const result = await response.json();
+          if (!response.ok) throw new Error(result.error || 'Sign-in unsuccessful.');
+          location.assign('/');
+        } catch (failure) { error.textContent = failure instanceof Error ? failure.message : 'Sign-in unsuccessful.'; error.hidden = false; }
+        finally { button.disabled = false; }
+      });
+    </script>
+  </body>
+</html>

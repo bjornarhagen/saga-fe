@@ -1,0 +1,34 @@
+<section id="forecast-view" class="view" hidden>
+  <header class="page-heading"><div><p class="eyebrow">02 / CASH-FLOW PROJECTIONS</p><h1>A little foresight.</h1><p class="subtitle">Try a change today. See what it means in one, two, or three months.</p></div></header>
+  <div class="forecast-layout">
+    <article class="card assumptions"><div class="card-heading"><div><p class="eyebrow">START HERE</p><h2>Your starting point</h2></div></div>
+    <label>Starting balances<select id="balance-source"><option value="manual">Enter a combined starting point</option><option value="accounts">Use saved account balances</option></select></label>
+    <p id="balance-source-note" class="input-note">Enter combined balances or choose your dated account balances.</p>
+    <label>Available cash <span>NOK</span><input id="cash" type="number" step="0.01" placeholder="Enter current balance"></label>
+      <p class="input-note">Cash you can spend, excluding the savings reserve below.</p>
+      <label>Savings reserve <span>NOK</span><input id="savings" type="number" min="0" step="0.01" placeholder="0"></label>
+      <label>Minimum cash buffer <span>NOK</span><input id="buffer" type="number" min="0" step="0.01" placeholder="0"></label>
+      <label>Balance date<input id="balance-date" type="date"></label>
+      <div class="form-divider"></div><h3>Monthly assumptions</h3>
+      <label>Use history from<select id="lookback"><option value="1">Last complete month</option><option value="3" selected>Last 3 complete months</option><option value="6">Last 6 complete months</option><option value="12">Last 12 complete months</option></select></label>
+      <p id="baseline-caption" class="input-note"></p>
+      <label>Regular income <span>NOK / month</span><input id="income" type="number" min="0" step="0.01"></label>
+      <label>Spending & bills <span>NOK / month</span><input id="expense" type="number" min="0" step="0.01"></label>
+      <label>Savings & investments <span>NOK / month</span><input id="saving" type="number" min="0" step="0.01"></label>
+      <p class="input-note">The average covers savings outside this export. Add any planned transfers from available cash into your reserve here.</p>
+      <button id="reset-baseline" class="text-button">↺ Use averages from history</button>
+      <button id="large-payments" class="text-button">Review large historical payments →</button>
+    </article>
+    <div class="forecast-results">
+      <article class="card"><div class="card-heading"><div><p class="eyebrow">YOUR POSSIBLE PATH</p><h2>Cash over time</h2></div><div class="segments" id="horizon-buttons" aria-label="Forecast horizon"><button data-horizon="1">1 month</button><button data-horizon="2">2 months</button><button data-horizon="3" class="selected">3 months</button></div></div>
+        <div class="scenario-row"><span class="muted small">Try a scenario</span><button data-scenario="same" class="scenario selected">Current pace</button><button data-scenario="less" class="scenario">Spend 10% less</button><button data-scenario="more" class="scenario">Spend 10% more</button></div>
+        <div id="forecast-chart" class="forecast-chart"></div>
+        <div id="forecast-stats" class="forecast-stats"></div>
+        <div class="scenario-inputs"><label>Monthly spending change <span>NOK / month</span><input id="adjustment" type="number" step="0.01" value="0"><small>Negative means spending less.</small></label><label>One-off expense in month 1 <span>NOK</span><input id="one-off" type="number" min="0" step="0.01" value="0"></label></div>
+        <div id="forecast-message" class="forecast-message" aria-live="polite"></div>
+      </article>
+      <article class="card"><div class="card-heading"><h2>Month by month</h2><span class="muted small">Rolling monthly estimates</span></div><div id="forecast-table"></div></article>
+      <details class="method-note"><summary>How this forecast works</summary><p>The baseline uses the average of completed months before the latest export date. Regular income uses rows marked as salary or “Inntekt”. Other incoming money, refunds, and interest do not become recurring income automatically. All non-transfer outflows are included in spending or external savings.</p><p>Cash = starting cash + regular income − spending − external savings − spending change. The one-off expense is subtracted in month 1. Savings reserve is shown separately and is not automatically withdrawn. Internal transfers are excluded. Mark one-off historical transactions in Transactions to leave them out of the baseline.</p><p>Monthly amounts are held constant. This estimate does not model payday, bill dates, interest, tax changes, or daily cash lows. End-of-month estimates can look healthy even if a bill is due before payday. It is a scenario calculation, not a bank balance or a guarantee.</p></details>
+    </div>
+  </div>
+</section>

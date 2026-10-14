@@ -1,0 +1,23 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: saga-fe
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: saga-fe
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: saga-fe-access
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: tailscale-saga-fe
+      ports:
+        - protocol: TCP
+          port: 4321
+  # Ingestion happens through authenticated requests. The app needs no outbound
+  # network access to process local SQLite data or self-hosted assets.
+  egress: []

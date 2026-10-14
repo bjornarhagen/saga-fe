@@ -1,0 +1,116 @@
+/* ============================================================
+   Theme: girlypop — kawaii-goth (ADR-013's named personality:
+   "kawaii-goth line-drawings, bows/stars"). Dark is the design
+   as drawn: a near-black plum ground under hot pink and pale
+   gold. Light is a blush-paper variant, not an inversion — the
+   pinks deepen so they still carry the 3:1 bar on a near-white
+   ground (the trap the flagship's light amber fell into).
+   Every value passes theme-contrast.test.ts (text >= 4.5:1 on
+   every surface, status/accents >= 3:1 on --bg), both modes.
+   ============================================================ */
+
+[data-theme="girlypop"] {
+  /* surfaces (light — blush paper) */
+  --bg: #fdf4f8;
+  --bg-1: #f9eaf1;
+  --bg-2: #f4e0ea;
+  --panel: #efd6e3;
+  --panel-2: #e9ccdb;
+  --hairline: #e0bccf;
+  --border: #cfa0b9;
+  --border-strong: #a9738f;
+  --rule-line: #e0bccf;
+
+  /* ink (light) — plum, not black: the goth half stays warm */
+  --fg: #2b0f20;
+  --fg-1: #48213d;
+  --fg-dim: #7d4265;
+  --fg-muted: #9a6a86;
+  --fg-faint: #c4a0b4;
+
+  /* accents — hot pink primary, gold secondary. Both are pushed
+     darker than the dark mode's: pale gold reads at 1.9:1 on
+     blush paper, so light mode gets a true old-gold instead. */
+  --accent: #c2185b;
+  --link: var(--accent);
+  --accent-dim: #8e1244;
+  --accent-2: #9c7714;
+  --accent-2-dim: #75590f;
+
+  /* status */
+  --ok: #12805e;
+  --warn: #9c7714;
+  --err: #c02236;
+
+  /* Foreground for filled primary controls. */
+  --button-ink: var(--bg);
+
+  /* type families — Pirata One stays the display face on purpose:
+     blackletter IS the goth half of kawaii-goth, so girlypop keeps
+     the flagship's mapping rather than swapping it (matrix already
+     proves the font layer swaps). No new family is vendored — CSP
+     is font-src 'self' and only these three are self-hosted. */
+  --theme-font-display: "Pirata One", "UnifrakturCook", serif;
+  --theme-font-mono:
+    "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --theme-font-body: "IBM Plex Sans", system-ui, -apple-system, sans-serif;
+
+  /* flavor layer (ADR-013 amendment): bows, stars, lace. Glyphs are
+     held to what JetBrains Mono actually ships — hearts and stars
+     from Miscellaneous Symbols, not Dingbats, so a bullet never
+     falls back to a proportional face and breaks the mono grid. */
+  --flavor-grid-line: rgba(194, 24, 91, 0.03);
+  --flavor-bullet: "♥";
+  --flavor-sep: "~";
+  --flavor-arrow: "→";
+  /* Finer and tighter than the flagship's 8px/16px dash: reads as
+     lace or a string of pearls rather than an industrial rule. */
+  --ornament-divider: repeating-linear-gradient(
+    90deg,
+    var(--border-strong) 0 2px,
+    transparent 2px 7px
+  );
+  --ornament-corner: url("/ornaments/girlypop/corner-large.svg");
+  --ornament-corner-small: url("/ornaments/girlypop/corner-small.svg");
+  --ornament-separator: url("/ornaments/girlypop/separator.svg");
+  --ornament-mark: url("/ornaments/girlypop/header-mark.svg");
+  --ornament-header: none;
+  /* Ratio is reserved for optional future artwork; the dashboard uses
+     compact SVG motifs instead of a large header engraving. */
+  --ornament-header-ratio: 3.2609;
+  --ornament-divider-cap: "★";
+}
+
+[data-theme="girlypop"][data-mode="dark"] {
+  --button-ink: var(--bg);
+  /* surfaces — near-black plum, the design as drawn */
+  --bg: #0d060f;
+  --bg-1: #140a17;
+  --bg-2: #1a0e1e;
+  --panel: #201225;
+  --panel-2: #27162c;
+  --hairline: #2e1a34;
+  --border: #3d2345;
+  --border-strong: #57325f;
+  --rule-line: #2a1730;
+
+  /* ink — pink-tinted whites, never neutral grey */
+  --fg: #fce9f5;
+  --fg-1: #f0c2e0;
+  --fg-dim: #c98fb8;
+  --fg-muted: #9a6d8d;
+  --fg-faint: #5f4159;
+
+  /* accents — hot pink and pale gold, free to be bright here */
+  --accent: #ff5fa2;
+  --link: var(--accent);
+  --accent-dim: #c73e7b;
+  --accent-2: #f5d98a;
+  --accent-2-dim: #c4a95f;
+
+  --ok: #5fe0b0;
+  --warn: #f5d98a;
+  --err: #ff6b81;
+
+  --flavor-grid-line: rgba(255, 95, 162, 0.035);
+}
