@@ -135,7 +135,11 @@ def check_exports(base, cookie, container, account_id, transaction_id, decisions
     assert json.loads(tables["settings"][0]["value_json"])["horizon"] == 2, "saved settings were omitted"
     assert json.loads(tables["transaction_edits"][0]["value_json"])["excludeForecast"] is True, "transaction edits were omitted"
     assert tables["transaction_relations"] == [{"transaction_a": decision["transactionId"], "transaction_b": decision["relatedTransactionId"], "status": decision["status"], "created_at": decision["createdAt"], "updated_at": decision["updatedAt"]} for decision in decisions], "saved connection decisions were omitted from export"
-    assert tables["transaction_account_memberships"] == [{"transaction_id": decision["transactionId"], "side": decision["side"], "endpoint_id": decision["endpointId"], "status": decision["status"], "created_at": decision["createdAt"], "updated_at": decision["updatedAt"]} for decision in memberships], "account membership decisions were omitted from export"
+    expected_memberships = [{"transaction_id": decision["transactionId"], "side": decision["side"], "endpoint_id": decision["endpointId"], "status": decision["status"], "created_at": decision["createdAt"], "updated_at": decision["updatedAt"]} for decision in memberships]
+    # Archives retain insertion order; the membership API sorts by identity.
+    def membership_key(row):
+        return row["transaction_id"], row["side"], row["endpoint_id"]
+    assert sorted(tables["transaction_account_memberships"], key=membership_key) == sorted(expected_memberships, key=membership_key), "account membership decisions were omitted from export"
     assert {row["id"] for row in tables["external_endpoint_refs"]} == {decision["endpointId"] for decision in memberships}, "reviewed external references were omitted from export"
     check_exports_clean(container)
     status, body, headers = request(base, "/api/export?format=sqlite", method="HEAD", cookie=cookie)
