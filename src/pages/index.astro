@@ -8,6 +8,7 @@ import TransactionDialog from '../components/dashboard/TransactionDialog.astro';
 import Accounts from '../components/dashboard/Accounts.astro';
 import TransactionDetail from '../components/dashboard/TransactionDetail.astro';
 import AccountDetail from '../components/dashboard/AccountDetail.astro';
+import BlockDialog from '../components/dashboard/BlockDialog.astro';
 ---
 <DashboardLayout>
   <Overview />
@@ -17,5 +18,5 @@ import AccountDetail from '../components/dashboard/AccountDetail.astro';
   <TransactionDetail />
   <AccountDetail />
   <DataMethod />
-  <TransactionDialog slot="dialog" />
+  <Fragment slot="dialog"><TransactionDialog /><BlockDialog /></Fragment>
 </DashboardLayout>

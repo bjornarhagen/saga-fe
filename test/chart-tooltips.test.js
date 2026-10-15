@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { initializeChartTooltips } from '../src/scripts/chart-tooltips.js';
 
 // A small event surface exercises the controller without a browser dependency.
-function harness() {
+function harness(inDialog = false) {
   const listeners = {}, windowListeners = {}, attributes = new Map();
   let observer;
   const tooltip = { addEventListener() {}, hidden: true, style: {}, innerHTML: '', setAttribute(name, value) { this[name] = value; }, contains: target => target === tooltip, getBoundingClientRect: () => ({ width: 240, height: 160 }) };
@@ -11,10 +11,11 @@ function harness() {
   const matrix = { inverse() { return this; } };
   const svg = { getScreenCTM: () => matrix };
   const points = [10, 50, 90].map((x, i) => ({ x, period: `Synthetic month ${i + 1}`, rows: [{ name: 'Spending', value: `${i + 1},05 kr`, color: 'var(--chart-out)', y: 50 }], extra: [] }));
+  const modal = { append(element) { element.parentElement = this; } };
   const chart = {
     dataset: { chartData: JSON.stringify({ title: 'Synthetic spending', left: 10, right: 90, top: 0, bottom: 100, points }) },
     isConnected: true,
-    closest: selector => selector === '[data-chart-data]' ? chart : null,
+    closest: selector => selector === '[data-chart-data]' ? chart : selector === 'dialog' && inDialog ? modal : null,
     querySelector: selector => selector === 'svg' ? svg : selection,
     contains: target => target === chart,
     setAttribute: (name, value) => attributes.set(name, value), removeAttribute: name => attributes.delete(name),
@@ -36,7 +37,7 @@ function harness() {
     listeners[name]({ target: chart, clientX: 50, clientY: 50, pointerType: 'mouse', ...event });
   };
   initializeChartTooltips(doc);
-  return { chart, tooltip, attributes, selection, send, windowListeners, observer: () => observer(), doc };
+  return { chart, tooltip, modal, attributes, selection, send, windowListeners, observer: () => observer(), doc };
 }
 
 test('keyboard inspection supports endpoint keys, dismissal, and removal during redraw', () => {
@@ -60,6 +61,19 @@ test('keyboard inspection supports endpoint keys, dismissal, and removal during 
   h.chart.isConnected = false; h.observer();
   assert.equal(h.tooltip.hidden, true);
   assert.equal(h.selection.innerHTML, '');
+});
+
+test('modal tooltips share the dialog top layer and Escape dismisses inspection before the dialog', () => {
+  const h = harness(true);
+  h.send('focusin', { target: h.chart });
+  assert.equal(h.tooltip.parentElement, h.modal);
+  let prevented = false, stopped = false;
+  h.send('keydown', { key: 'Escape', preventDefault() { prevented = true; }, stopPropagation() { stopped = true; } });
+  assert.equal(prevented, true); assert.equal(stopped, true);
+  assert.equal(h.tooltip.hidden, true);
+  prevented = false;
+  h.send('keydown', { key: 'Escape', preventDefault() { prevented = true; } });
+  assert.equal(prevented, false);
 });
 
 test('pointer inspection picks the nearest point and Escape stays dismissed until selection changes', () => {

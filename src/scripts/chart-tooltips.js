@@ -67,6 +67,9 @@ export function initializeChartTooltips(root = document) {
     if (input === 'pointer' && dismissed?.chart === chart && dismissed.index === next) return;
     dismissed = null;
     const data = dataFor(chart), point = data.points[next];
+    // Tooltips for a modal must share its top layer and remain interactive.
+    const host = chart.closest('dialog') || doc.body;
+    if (tooltip.parentElement !== host) host.append(tooltip);
     const changed = active !== chart || index !== next || series !== selectedSeries || tooltip.hidden;
     const resetNumbers = active !== chart || tooltip.hidden;
     if (active && active !== chart) hide();
@@ -130,7 +133,10 @@ export function initializeChartTooltips(root = document) {
   });
   root.addEventListener('focusout', event => { if (active && !active.contains(event.relatedTarget)) hide(); });
   root.addEventListener('keydown', event => {
-    if (event.key === 'Escape') { hide(true); return; }
+    if (event.key === 'Escape') {
+      if (active?.closest('dialog') && !tooltip.hidden) { event.preventDefault(); event.stopPropagation(); }
+      hide(true); return;
+    }
     const chart = chartFor(event.target);
     if (!chart || !['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
     event.preventDefault();
@@ -148,5 +154,6 @@ export function initializeChartTooltips(root = document) {
   }, true);
   win.addEventListener('resize', () => hide());
   win.addEventListener('blur', () => hide());
-  new win.MutationObserver(() => { if (active && !active.isConnected) hide(); }).observe(doc.getElementById('content') || doc.body, { childList: true, subtree: true });
+  root.addEventListener('close', () => hide(), true);
+  new win.MutationObserver(() => { if (active && !active.isConnected) hide(); }).observe(doc.body, { childList: true, subtree: true });
 }

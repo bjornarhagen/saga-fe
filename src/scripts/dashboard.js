@@ -9,8 +9,11 @@ import { periodStatistics, comparePeriods, ratio, activitySeries, automaticGroup
 import { renderStatistics, renderMetricCards, percentage, changeText } from './statistics.js';
 import { renderTimeSeriesChart } from './charts.js';
 import { initializeChartTooltips } from './chart-tooltips.js';
+import { initializeBlockDialog, registerReadOnlyBlock } from './block-dialog.js';
+import { registerRanking } from './ranking-dialog.js';
 
 initializeChartTooltips();
+initializeBlockDialog();
 
 const $ = id => document.getElementById(id);
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -211,6 +214,8 @@ function renderOverview() {
     const matches = tx.filter(t => t.description === name && t.amount < 0 && t.kind === 'expense');
     return `<button class="merchant-row" data-merchant="${esc(name)}"><span class="merchant-icon">${esc(name.replace(/^Fra: /, '').slice(0, 1).toUpperCase())}</span><span class="merchant-name">${esc(name)}<small>${matches.length} payment${matches.length !== 1 ? 's' : ''}</small></span><span class="merchant-amount">${money(amount)}</span></button>`;
   }).join('') : '<p class="no-results">No payments in this period.</p>';
+  registerRanking($('categories'), 'Spending by category', s.categories, exactMoney);
+  registerRanking($('merchants'), 'Top places & payments', s.merchants, exactMoney);
   const review = state.transactions.filter(t => t.review).length;
   $('review-title').textContent = `${number.format(review)} transactions could use your context`;
   $('review-banner').hidden = review === 0;
@@ -256,7 +261,7 @@ function renderForecast() {
   const paths = p ? [{ id: 'balance', name: 'Your scenario', color: 'var(--chart-4)', projection: p }, ...comparisons] : [];
   $('forecast-history-note').textContent = b.months ? `History: ${monthText(b.start)}–${monthText(b.end)} · ${b.months} complete months. Historical methods use their own estimates; manual monthly inputs affect your scenario and unchanged assumptions. The spending change and one-off apply to all except unchanged assumptions.` : 'No complete history at this balance date. Enter all three monthly assumptions to use your scenario and unchanged assumptions.';
   if (p) renderForecastChart(cash, paths, buffer, balanceDate);
-  else { $('forecast-chart-history-note').textContent = ''; $('forecast-chart').innerHTML = `<div class="empty-state"><div class="empty-state-icon" aria-hidden="true">↗</div><h3>${invalid ? 'Check your assumptions.' : 'Start with what you have.'}</h3><p>${invalid ? 'Enter valid balances, a balance date, and nonnegative monthly amounts. A spending change cannot reduce total spending below zero. With no complete history, set all three monthly assumptions.' : 'Enter your available cash on the left. Then explore how your recent income and spending could shape the next few months.'}</p></div>`; }
+  else { $('forecast-chart-history-note').textContent = ''; $('forecast-chart').innerHTML = `<div class="empty-state"><div class="empty-state-icon" aria-hidden="true">↗</div><h3>${invalid ? 'Check your assumptions.' : 'Start with what you have.'}</h3><p>${invalid ? 'Enter valid balances, a balance date, and nonnegative monthly amounts. A spending change cannot reduce total spending below zero. With no complete history, set all three monthly assumptions.' : 'Enter your available cash on the left. Then explore how your recent income and spending could shape the next few months.'}</p></div>`; registerReadOnlyBlock($('forecast-chart'), 'Cash over time'); }
   const net = a.income - a.expense - a.saving - adjustment;
   renderStatistics($('forecast-stats'), [
     ['Monthly cash change', Number.isFinite(net) ? money(net) : '—', net < 0 ? 'negative' : 'positive'],
@@ -277,6 +282,8 @@ function renderForecast() {
   else $('forecast-message').textContent = `This scenario ends ${money(p.headroom)} above your chosen buffer. Monthly cash ${p.monthlyNet === 0 ? 'stays level' : `grows by ${money(p.monthlyNet)}`}. This is end-of-period headroom; payment timing within the month is not modeled.`;
   renderForecastComparison(paths, cash, balanceDate);
   $('forecast-table').innerHTML = p ? `<div class="table-scroll"><table><caption class="sr-only">Monthly cash projections by method</caption><thead><tr><th scope="col">Date</th>${paths.map(path => `<th scope="col" class="numeric">${esc(path.name)}</th>`).join('')}<th scope="col" class="numeric">Scenario cash change</th><th scope="col" class="numeric">Scenario reserve needed</th></tr></thead><tbody>${p.points.map((point, i) => `<tr><th scope="row">${dateText(point.date)}</th>${paths.map(path => `<td class="numeric ${path.projection.points[i].balance < 0 ? 'negative' : ''}">${exactMoney(path.projection.points[i].balance)}</td>`).join('')}<td class="numeric">${exactMoney(point.cashChange)}</td><td class="numeric">${exactMoney(point.reserveNeeded)}</td></tr>`).join('')}</tbody></table></div><p class="input-note">Cash before drawing from savings. Reserve needed is cumulative to restore the buffer at each date. Negative cash shows a shortfall. Do not add reserve-needed rows together.</p>` : '<p class="no-results">Your monthly estimates will appear once your starting balance is entered.</p>';
+  registerReadOnlyBlock($('forecast-comparison'), 'Compare outcomes');
+  registerReadOnlyBlock($('forecast-table'), 'Month by month');
 }
 function renderForecastMethods(methods) {
   const container = $('forecast-method-options');
