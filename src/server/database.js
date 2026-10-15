@@ -74,15 +74,21 @@ CREATE TABLE account_profiles (
   institution_override INTEGER NOT NULL DEFAULT 0
 );
 INSERT INTO account_profiles(account_id) SELECT id FROM accounts;`;
-export const DATABASE_SCHEMA_VERSION = 5;
-const migrations = [null, schema, relationSchema, membershipSchema, categorySchema, profileSchema];
+const ownershipSchema = `CREATE TABLE account_ownership (
+  endpoint_id TEXT PRIMARY KEY REFERENCES external_endpoint_refs(id),
+  account_id TEXT NOT NULL REFERENCES accounts(id),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);`;
+export const DATABASE_SCHEMA_VERSION = 6;
+const migrations = [null, schema, relationSchema, membershipSchema, categorySchema, profileSchema, ownershipSchema];
 const now = () => new Date().toISOString();
 const own = (object, key) => Object.prototype.hasOwnProperty.call(object, key);
 export const LEDGER_TABLES = Object.freeze([
   'accounts', 'categories', 'counterparties', 'ingest_sources',
   'account_identifiers', 'category_identifiers', 'counterparty_identifiers',
   'balance_snapshots', 'transactions', 'source_transaction_keys',
-  'ingest_batches', 'ingest_rows', 'transaction_edits', 'settings', 'transaction_relations', 'external_endpoint_refs', 'transaction_account_memberships', 'transaction_category_decisions', 'account_profiles'
+  'ingest_batches', 'ingest_rows', 'transaction_edits', 'settings', 'transaction_relations', 'external_endpoint_refs', 'transaction_account_memberships', 'transaction_category_decisions', 'account_profiles', 'account_ownership'
 ]);
 
 export function createStore(path = ':memory:') {
@@ -207,6 +213,7 @@ export function createStore(path = ':memory:') {
   const activityProjection = (transactions = transactionRows(), overrides = getOverrides()) => projectActivity({
     transactions, overrides, accounts: accountRows(), membershipDecisions: membershipRows(),
     categoryDecisions: categoryDecisionRows(),
+    ownershipLinks: all('SELECT o.*,r.source_id,r.provider_identifier,s.adapter FROM account_ownership o JOIN external_endpoint_refs r ON r.id=o.endpoint_id JOIN ingest_sources s ON s.id=r.source_id'),
     endpointReferences: all('SELECT r.*,s.adapter FROM external_endpoint_refs r LEFT JOIN ingest_sources s ON s.id=r.source_id'),
     accountIdentifiers: all('SELECT i.*,s.adapter FROM account_identifiers i JOIN ingest_sources s ON s.id=i.source_id'),
     counterparties: all('SELECT id,name FROM counterparties'),
@@ -247,6 +254,50 @@ export function createStore(path = ':memory:') {
       return { decisions: membershipRows() };
     });
   };
+  const insertAccount = input => {
+    v.object(input, 'Account');
+    for (const key of Object.keys(input)) if (!['name', 'currency', 'role', 'balance', 'balanceDate', 'accountType', 'institution'].includes(key)) throw new v.ValidationError('Unknown account field.');
+    const name = v.string(input.name, 'Account name'), currency = v.currency(input.currency), accountType = v.accountType(input.accountType || 'other'), accountRole = v.role(input.role || (accountType === 'investment' ? 'excluded' : 'available'));
+    const institution = v.string(input.institution ?? '', 'Institution', 200, true);
+    v.accountProfile(accountType, accountRole);
+    if (own(input, 'balance') && input.balance !== null) v.amount(input.balance);
+    const balanceDate = v.date(input.balanceDate || v.today());
+    const id = randomUUID(); run('INSERT INTO accounts(id,name,currency,role,name_override,role_override,created_at) VALUES(?,?,?,?,1,1,?)', id, name, currency, accountRole, now());
+    run('INSERT INTO account_profiles(account_id,account_type,institution,type_override,institution_override) VALUES(?,?,?,1,1)', id, accountType, institution);
+    if (own(input, 'balance')) insertBalance(id, input.balance, balanceDate);
+    return id;
+  };
+  const updateAccountOwnership = input => {
+    v.object(input, 'Account ownership');
+    for (const key of Object.keys(input)) if (!['endpointId', 'accountId', 'account'].includes(key)) throw new v.ValidationError('Unknown account ownership field.');
+    const endpointId = v.string(input.endpointId, 'Endpoint ID', 200);
+    if (own(input, 'accountId') === own(input, 'account')) throw new v.ValidationError('Choose an existing account or supply a new account.');
+    if (own(input, 'accountId') && input.accountId !== null) v.string(input.accountId, 'Account ID', 200);
+    return atomic(() => {
+      const saved = query('SELECT account_id FROM account_ownership WHERE endpoint_id=?', endpointId);
+      if (input.accountId === null) {
+        if (!saved) throw new v.ValidationError('The ownership link does not exist.');
+        run('DELETE FROM account_ownership WHERE endpoint_id=?', endpointId);
+        return { endpointId, accountId: null };
+      }
+      // Repeated submissions are idempotent; do not create a second account.
+      if (saved) {
+        if (input.accountId && input.accountId !== saved.account_id) throw new v.ValidationError('Remove the existing ownership link before choosing another account.');
+        return { endpointId, accountId: saved.account_id };
+      }
+      const projection = activityProjection(), target = projection.endpointActivity(endpointId)?.endpoint;
+      if (!target || target.owned || !target.evidence?.isAccountIdentifier) throw new v.ValidationError('Choose an external account with a recorded account identifier. Use a per-payment link for merchant text or shared collection accounts.');
+      const reference = projection.referenceSnapshot(endpointId);
+      if (!reference?.sourceId || !reference.providerIdentifier) throw new v.ValidationError('The external account source reference is unavailable.');
+      const accountId = own(input, 'account') ? insertAccount(input.account) : input.accountId;
+      if (!query('SELECT id FROM accounts WHERE id=?', accountId)) throw new v.ValidationError('The owned account does not exist.');
+      const timestamp = now();
+      run('INSERT INTO external_endpoint_refs(id,kind,source_id,provider_identifier,counterparty_id,label,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING', reference.id, reference.kind, reference.sourceId, reference.providerIdentifier, reference.counterpartyId, reference.label, timestamp, timestamp);
+      run('INSERT INTO account_ownership(endpoint_id,account_id,created_at,updated_at) VALUES(?,?,?,?)', endpointId, accountId, timestamp, timestamp);
+      accountPayload();
+      return { endpointId, accountId };
+    });
+  };
   const accountValues = (accounts, projection = activityProjection()) => accounts.map(account => ({ ...account,
     valueHistory: valueHistory(snapshots(account.id), projection.endpointActivity(account.id)?.flows || [], account.id)
   }));
@@ -267,6 +318,13 @@ export function createStore(path = ':memory:') {
       const entity = (type, item) => {
         const table = { account: 'accounts', category: 'categories', counterparty: 'counterparties' }[type], identifiers = `${type}_identifiers`, column = `${type}_id`;
         let found = query(`SELECT ${column} AS id FROM ${identifiers} WHERE source_id=? AND external_id=?`, source.id, item.externalId);
+        if (type === 'account' && !found) {
+          const declared = query('SELECT o.account_id AS id FROM account_ownership o JOIN external_endpoint_refs r ON r.id=o.endpoint_id WHERE r.source_id=? AND r.provider_identifier=?', source.id, item.externalId);
+          if (declared && (!item.id || item.id === declared.id)) {
+            found = declared;
+            run('INSERT INTO account_identifiers(source_id,external_id,account_id) VALUES(?,?,?)', source.id, item.externalId, found.id);
+          } else if (declared) throw new v.ValidationError('The account identifier is already linked to another record.');
+        }
         if (item.id) {
           if (!query(`SELECT id FROM ${table} WHERE id=?`, item.id)) throw new v.ValidationError(`The linked ${type} does not exist.`);
           if (found && found.id !== item.id) throw new v.ValidationError(`The ${type} identifier is already linked to another record.`);
@@ -347,13 +405,14 @@ export function createStore(path = ':memory:') {
   return {
     ingest, getTransactions, getAccounts: () => readSnapshot(() => { const result = accountPayload(); return { ...result, accounts: accountValues(result.accounts) }; }),
     getRelations: () => ({ decisions: relationRows() }), updateRelation,
+    updateAccountOwnership,
     getAccountMemberships: () => ({ decisions: membershipRows() }), updateAccountMembership,
     getEndpoints: () => readSnapshot(() => activityProjection().directory()),
     getEndpointActivity: id => readSnapshot(() => {
       v.string(id, 'Endpoint ID', 200); const result = activityProjection().endpointActivity(id);
       if (result?.endpoint.accountId) {
         const account = accountRows().find(row => row.id === result.endpoint.accountId);
-        Object.assign(result.endpoint, { role: account.role, accountType: account.accountType, institution: account.institution, balance: account.balance, balanceDate: account.balanceDate, balanceHistory: snapshots(account.id).reverse(), valueHistory: valueHistory(snapshots(account.id), result.flows, account.id) });
+        Object.assign(result.endpoint, { ownershipLinks: all('SELECT o.endpoint_id AS endpointId,substr(r.provider_identifier,-4) AS identifierSuffix,s.adapter FROM account_ownership o JOIN external_endpoint_refs r ON r.id=o.endpoint_id JOIN ingest_sources s ON s.id=r.source_id WHERE o.account_id=? ORDER BY o.created_at,o.endpoint_id', account.id), role: account.role, accountType: account.accountType, institution: account.institution, balance: account.balance, balanceDate: account.balanceDate, balanceHistory: snapshots(account.id).reverse(), valueHistory: valueHistory(snapshots(account.id), result.flows, account.id) });
       }
       return result;
     }),
@@ -425,21 +484,10 @@ export function createStore(path = ':memory:') {
     },
     getMetadata: () => ({ accounts: accountRows(), categories: all('SELECT id,name,parent_id AS parentId FROM categories ORDER BY name'), counterparties: all('SELECT id,name FROM counterparties ORDER BY name') }),
     getHistory: () => ({ adapters, batches: all('SELECT b.id,s.adapter,b.imported_at AS importedAt,b.filename,b.row_count AS rows,b.inserted_count AS inserted,b.existing_count AS existing,b.metadata_count AS metadata FROM ingest_batches b JOIN ingest_sources s ON s.id=b.source_id ORDER BY b.imported_at DESC,b.rowid DESC LIMIT 100') }),
-    createAccount: input => {
-      v.object(input, 'Account');
-      for (const key of Object.keys(input)) if (!['name', 'currency', 'role', 'balance', 'balanceDate', 'accountType', 'institution'].includes(key)) throw new v.ValidationError('Unknown account field.');
-      const name = v.string(input.name, 'Account name'), currency = v.currency(input.currency), accountType = v.accountType(input.accountType || 'other'), accountRole = v.role(input.role || (accountType === 'investment' ? 'excluded' : 'available'));
-      const institution = v.string(input.institution ?? '', 'Institution', 200, true);
-      v.accountProfile(accountType, accountRole);
-      if (own(input, 'balance') && input.balance !== null) v.amount(input.balance);
-      const balanceDate = v.date(input.balanceDate || v.today());
-      return atomic(() => {
-        const id = randomUUID(); run('INSERT INTO accounts(id,name,currency,role,name_override,role_override,created_at) VALUES(?,?,?,?,1,1,?)', id, name, currency, accountRole, now());
-        run('INSERT INTO account_profiles(account_id,account_type,institution,type_override,institution_override) VALUES(?,?,?,1,1)', id, accountType, institution);
-        if (own(input, 'balance')) insertBalance(id, input.balance, balanceDate);
-        const result = accountPayload(); return { account: result.accounts.find(account => account.id === id), ...result };
-      });
-    },
+    createAccount: input => atomic(() => {
+      const id = insertAccount(input);
+      const result = accountPayload(); return { account: result.accounts.find(account => account.id === id), ...result };
+    }),
     updateAccount: input => {
       v.object(input, 'Account'); const id = v.string(input.id, 'Account ID', 200);
       for (const key of Object.keys(input)) if (!['id', 'name', 'role', 'balance', 'balanceDate', 'accountType', 'institution'].includes(key)) throw new v.ValidationError('Unknown account field.');

@@ -15,7 +15,7 @@ test('complete JSON archive covers every schema table and preserves all saved le
     accounts: [{ externalId: 'fixture-account', name: 'Fé · øre', balance: 105, balanceDate: '2026-01-01' }],
     categories: [{ externalId: 'parent', name: 'Parent' }, { externalId: 'child', name: 'Child', parentExternalId: 'parent' }],
     counterparties: [{ externalId: 'fixture-party', name: 'Example sender / receiver' }],
-    transactions: [{ externalId: 'fixture-payment', date: '2026-01-01', amount: -105, description: 'Example payment', accountExternalId: 'fixture-account', categoryExternalId: 'parent', subcategoryExternalId: 'child', counterpartyExternalId: 'fixture-party' }, { externalId: 'fixture-related-payment', date: '2026-01-02', amount: -210, description: 'Another example payment', accountExternalId: 'fixture-account', categoryExternalId: 'parent', counterpartyExternalId: 'fixture-party' }]
+    transactions: [{ externalId: 'fixture-payment', date: '2026-01-01', amount: -105, description: 'Example payment', toExternalAccount: { externalId: 'fixture-other-external' }, accountExternalId: 'fixture-account', categoryExternalId: 'parent', subcategoryExternalId: 'child', counterpartyExternalId: 'fixture-party' }, { externalId: 'fixture-related-payment', date: '2026-01-02', amount: -210, description: 'Another example payment', toExternalAccount: { externalId: 'fixture-external-account' }, accountExternalId: 'fixture-account', categoryExternalId: 'parent', counterpartyExternalId: 'fixture-party' }]
   };
   store.ingest({ adapter: 'canonical-v1', sourceKey: 'archive-fixture', data });
   const account = store.getAccounts().accounts[0];
@@ -26,6 +26,7 @@ test('complete JSON archive covers every schema table and preserves all saved le
   store.updateAccountMembership({ transactionId: id, side: 'to', endpointId: store.getTransactionDetail(id).to.id, status: 'confirmed' });
   store.updateCategories({ transactionIds: [id], category: 'Confirmed category', status: 'user_applied' });
   store.updateOverride({ id, override: { category: 'Owner category', excludeForecast: true } });
+  store.updateAccountOwnership({ endpointId: store.getTransactions().transactions.find(row => row.id !== id).toEndpointId, accountId: account.id });
   store.saveSettings({ fields: { cash: '-1.05', 'balance-date': '2026-01-02' }, assumptions: { income: 10000 }, balanceSource: 'manual' });
   const archive = JSON.parse(JSON.stringify(store.exportLedger()));
   assert.equal(archive.format, 'saga-fe-ledger');

@@ -104,3 +104,8 @@ authentication configuration, session data or server filesystem paths.
 Schema version 5 also preserves account type/institution profiles. Per-payment
 owned-account links live in `transaction_edits`; dated valuations remain in
 `balance_snapshots`. Both are included in JSON and SQLite archives.
+
+Schema version 6 also includes `account_ownership`, which links recorded external
+source account references to accounts the owner marks as theirs. These decisions
+are separate from imported account identifiers and per-payment membership or
+ownership edits. Both JSON archives and SQLite backups preserve the links.

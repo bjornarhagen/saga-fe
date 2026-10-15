@@ -125,7 +125,7 @@ test('version-three migration, reimports, reopen and backup preserve owner profi
   let store = createStore(path); const { deposit } = seed(store);
   store.saveSettings({ fields: { cash: '123.45' } });
   store.close();
-  const legacy = new DatabaseSync(path); legacy.exec('DROP TABLE account_profiles; DROP TABLE transaction_category_decisions; PRAGMA user_version=3'); legacy.close();
+  const legacy = new DatabaseSync(path); legacy.exec('DROP TABLE account_ownership; DROP TABLE account_profiles; DROP TABLE transaction_category_decisions; PRAGMA user_version=3'); legacy.close();
   store = createStore(path);
   assert.equal(store.getAccounts().accounts[0].accountType, 'other');
   assert.equal(store.getSettings().fields.cash, '123.45');
@@ -152,8 +152,8 @@ test('version-four category decisions survive account-profile migration and late
   let store = createStore(path); const { deposit } = seed(store);
   store.updateCategories({ transactionIds: [deposit.id], category: 'Owner savings category', status: 'user_applied' });
   store.saveSettings({ fields: { cash: '123.45' } });
-  const before = store.exportLedger().tables; delete before.account_profiles; store.close();
-  const legacy = new DatabaseSync(path); legacy.exec('DROP TABLE account_profiles; PRAGMA user_version=4'); legacy.close();
+  const before = store.exportLedger().tables; delete before.account_profiles; delete before.account_ownership; store.close();
+  const legacy = new DatabaseSync(path); legacy.exec('DROP TABLE account_ownership; DROP TABLE account_profiles; PRAGMA user_version=4'); legacy.close();
   store = createStore(path); t.after(() => store.close());
   for (const [table, rows] of Object.entries(before)) assert.deepEqual(store.exportLedger().tables[table], rows);
   assert.equal(store.getTransactionDetail(deposit.id).transaction.category, 'Owner savings category');

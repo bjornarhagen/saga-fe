@@ -22,6 +22,7 @@ export function createExplorer({ api, exactMoney, dateText, getTransactions, edi
   let directoryPage = 0, endpointPage = 0, relatedPage = 0, relatedMode = 'related';
   const detailStates = new Map();
   let accountDetail = null, transactionDetail = null, decisions = [];
+  let ownershipBusy = false;
   let decisionVersion = 0, decisionsAvailable = false, decisionBusy = false;
   const memberships = createMembershipController({ api, reloadLedger, notify, getRouteKey: () => routeHash(route || {}) });
   const endpoint = id => endpointById.get(id);
@@ -144,6 +145,19 @@ export function createExplorer({ api, exactMoney, dateText, getTransactions, edi
     $('endpoint-count').textContent = `${rows.length} matching ledger entries`;
     $('endpoint-transactions').innerHTML = page.shown.length ? page.shown.map(row => paymentRow(row, row.pairedRows ? 'Paired internal transfer leg · totals count the two entries once' : '', true, memberships.accountRow(row, accountDetail.endpoint))).join('') : '<tr><td colspan="4" class="no-results">No saved entries match these filters.</td></tr>';
   }
+  function renderOwnership(node) {
+    const controls = $('account-ownership-controls');
+    if (node.owned) {
+      controls.innerHTML = (node.ownershipLinks || []).map((item, index) => `<div class="account-ownership-link"><p class="input-note">Ownership link ${index + 1} · source account ••••${esc(item.identifierSuffix)} · ${esc(item.adapter)}. Removing the link keeps this account and its recorded values. Ownership established by a later account import still applies.</p><button type="button" class="outline-button" data-remove-ownership="${esc(item.endpointId)}" ${ownershipBusy ? 'disabled' : ''}>Remove ownership link ${index + 1}</button></div>`).join('');
+      return;
+    }
+    if (!node.evidence?.isAccountIdentifier) {
+      controls.innerHTML = '<p class="input-note">Account-wide ownership needs a recorded account identifier. To link an individual payment to your account, use “Review transaction”.</p>';
+      return;
+    }
+    const selectOptions = labels => Object.entries(labels).map(([value, label]) => `<option value="${value}">${esc(label)}</option>`).join('');
+    controls.innerHTML = `<details class="account-settings"><summary>Mark as my account</summary><form id="account-ownership-form" class="account-form"><fieldset class="owned-account-fields" ${ownershipBusy ? 'disabled' : ''}><legend>Account ownership</legend><p class="input-note">Applies to this source account across all saved and future imports from this source. Transfers use your accounts’ forecast roles. For a shared collection account, link individual payments in “Review transaction”.</p><label>My account<select name="accountId"><option value="">Create a new account</option>${endpoints.filter(item => item.owned).map(item => `<option value="${esc(item.accountId)}">${esc(item.name)}</option>`).join('')}</select></label><div id="ownership-new-account"><label>Account name<input name="name" value="${esc(node.name)}" required maxlength="200" /></label><label>Bank or platform<input name="institution" maxlength="200" /></label><label>Account type<select name="accountType">${selectOptions(accountTypes)}</select></label><label>Use in forecast<select name="role">${selectOptions(accountRoles)}</select></label></div><p class="input-note">Available-cash transfers stay out of income and spending. Transfers into reserves or investments count as savings. Explicit transaction classifications take priority. Record a balance separately in Accounts.</p><button type="submit" class="primary-button">Mark as my account</button></fieldset></form></details>`;
+  }
   function renderEndpoint() {
     const { endpoint: node, summary, coverage = {} } = accountDetail;
     $('account-detail-title').textContent = node.name;
@@ -158,6 +172,7 @@ export function createExplorer({ api, exactMoney, dateText, getTransactions, edi
       ['Active payments', `${paymentsLabel(summary.payments)} · ${summary.transactionRows} ledger entries`]
     ]) + (node.balanceHistory?.length ? `<details class="source-fields"><summary>Saved balance history (${node.balanceHistory.length})</summary>${definition(node.balanceHistory.map(snapshot => [snapshot.date, snapshot.amount == null ? 'Not set' : exactMoney(snapshot.amount)]))}</details>` : '');
     $('account-detail-identifiers').innerHTML = node.identifiers?.length ? definition(node.identifiers.map(item => [item.adapter || 'Imported source', `<code>${esc(item.value)}</code>`])) : '<p class="input-note">No source identifier is saved. This identity is tracked by its private ledger ID.</p>';
+    renderOwnership(node);
     renderAccountGroups();
     renderEndpointRows();
   }
@@ -178,7 +193,7 @@ export function createExplorer({ api, exactMoney, dateText, getTransactions, edi
     $(prefix + '-title').textContent = transaction ? 'Transaction details.' : 'Account details.';
     $(prefix + '-body').innerHTML = '';
     if (transaction) { transactionDetail = null; $('transaction-membership-body').innerHTML = ''; $('edit-detail-transaction').disabled = true; renderConnections(); }
-    else { accountDetail = null; $('account-detail-summary').innerHTML = ''; $('account-activity-insights').innerHTML = ''; $('account-activity-statistics').hidden = true; $('account-activity-chart').innerHTML = ''; $('account-activity-chart-card').hidden = true; $('account-detail-identifiers').innerHTML = ''; $('endpoint-category-groups').innerHTML = ''; $('endpoint-transactions').innerHTML = ''; $('endpoint-count').textContent = ''; $('endpoint-scope-note').textContent = ''; }
+    else { accountDetail = null; $('account-ownership-controls').innerHTML = ''; $('account-ownership-status').textContent = ''; $('account-detail-summary').innerHTML = ''; $('account-activity-insights').innerHTML = ''; $('account-activity-statistics').hidden = true; $('account-activity-chart').innerHTML = ''; $('account-activity-chart-card').hidden = true; $('account-detail-identifiers').innerHTML = ''; $('endpoint-category-groups').innerHTML = ''; $('endpoint-transactions').innerHTML = ''; $('endpoint-count').textContent = ''; $('endpoint-scope-note').textContent = ''; }
     const membershipReadVersion = memberships.version();
     try {
       const result = await api(`/api/${transaction ? 'transactions' : 'endpoints'}/${encodeURIComponent(next.id)}`);
@@ -227,6 +242,42 @@ export function createExplorer({ api, exactMoney, dateText, getTransactions, edi
     }
     finally { decisionBusy = false; decisionVersion++; renderConnections(); }
     if (route?.view === 'transaction' && route.id === selectedId) $('relation-save-status').focus({ preventScroll: true });
+  });
+  $('account-ownership-controls').addEventListener('change', event => {
+    const form = event.target.closest('#account-ownership-form'); if (!form) return;
+    const existing = !!form.elements.accountId.value;
+    $('ownership-new-account').hidden = existing;
+    for (const control of $('ownership-new-account').querySelectorAll('input,select')) control.disabled = existing;
+    const investment = form.elements.accountType.value === 'investment';
+    for (const option of form.elements.role.options) option.disabled = investment && option.value !== 'excluded';
+    if (investment) form.elements.role.value = 'excluded';
+  });
+  async function saveOwnership(body) {
+    if (ownershipBusy) return;
+    ownershipBusy = true;
+    for (const control of $('account-ownership-controls').querySelectorAll('button,fieldset')) control.disabled = true;
+    $('account-ownership-status').textContent = 'Saving account ownership…';
+    try {
+      await api('/api/account-ownership', { method: 'PATCH', body });
+      await reloadLedger();
+      notify(body.accountId === null ? 'Ownership link removed. The account and recorded values are kept.' : 'Account marked as yours. Matching transfers now use its forecast role.');
+    } catch (error) {
+      $('account-ownership-status').textContent = `Account ownership could not be verified. Refresh to check before trying again. ${error.message}`;
+    } finally {
+      ownershipBusy = false;
+      if (accountDetail) renderOwnership(accountDetail.endpoint);
+    }
+  }
+  $('account-ownership-controls').addEventListener('submit', event => {
+    const form = event.target.closest('#account-ownership-form'); if (!form || !accountDetail) return;
+    event.preventDefault();
+    const data = new FormData(form), accountId = data.get('accountId');
+    const body = { endpointId: accountDetail.endpoint.id, ...(accountId ? { accountId } : { account: { name: data.get('name'), institution: data.get('institution'), accountType: data.get('accountType'), role: data.get('role'), currency: 'NOK' } }) };
+    void saveOwnership(body);
+  });
+  $('account-ownership-controls').addEventListener('click', event => {
+    const button = event.target.closest('[data-remove-ownership]'); if (!button) return;
+    void saveOwnership({ endpointId: button.dataset.removeOwnership, accountId: null });
   });
   $('edit-detail-transaction').addEventListener('click', () => { if (transactionDetail) editTransaction(transactionDetail.transaction.id); });
   return {

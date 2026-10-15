@@ -77,6 +77,17 @@ reports the difference beyond recorded movements, not investment performance;
 missing data, fees and interest can contribute to the residual. Investment
 returns are not forecast. The app does not schedule transfers.
 
+Schema version 6 adds `account_ownership`. An owner can mark a recorded external
+account as theirs in account details, creating an account or linking an existing
+one. The link applies to that source identity in both directions, including past
+and future imports. Raw source rows, payment edits and membership decisions stay
+intact. Merchant text hints and unknown identities use per-payment links instead.
+Removing ownership keeps the account and its values; source-declared ownership
+from a later metadata import still applies. Later metadata for the same source
+identity adopts the linked account instead of creating a duplicate. Matching
+transfer legs across feeds use the existing same-day, same-amount inference;
+transfers booked on different days remain separate activity payments.
+
 Owner settings and transaction corrections persist in SQLite across browsers and
 restarts. The first local launch migrates earlier browser settings when the
 database has none. Appearance remains a per-browser preference. API mutations
