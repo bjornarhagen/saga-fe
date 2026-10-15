@@ -1,3 +1,5 @@
+import { renderMetricCards } from './statistics.js';
+
 const escape = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
 const integerAmount = value => value === '' ? null : Math.round(Number(value) * 100);
 
@@ -24,7 +26,7 @@ export function createAccountController({ api, money, today, onChange, onUse, on
       const total = Number(known.reduce((sum, a) => sum + BigInt(a.balance), 0n));
       return { role, total, known: known.length, missing: rows.length - known.length, rows: rows.length };
     });
-    $('account-summary').innerHTML = totals.map(({ role, total, known, missing, rows }) => `<article class="metric"><div class="metric-label">${{ available: 'Available cash', reserve: 'Savings reserve', excluded: 'Excluded accounts' }[role]}</div><div class="metric-value">${known || !rows ? money(total) : 'Not set'}</div><div class="metric-note">${missing ? `${missing} balance${missing === 1 ? '' : 's'} unknown · known subtotal only` : `${rows} account${rows === 1 ? '' : 's'}`}</div></article>`).join('');
+    renderMetricCards($('account-summary'), totals.map(({ role, total, known, missing, rows }) => ({ label: { available: 'Available cash', reserve: 'Savings reserve', excluded: 'Excluded accounts' }[role], value: known || !rows ? money(total) : 'Not set', note: missing ? `${missing} balance${missing === 1 ? '' : 's'} unknown · known subtotal only` : `${rows} account${rows === 1 ? '' : 's'}`, icon: { available: 'balance', reserve: 'saving', excluded: 'payment' }[role], tone: { available: 'income', reserve: 'saving', excluded: 'neutral' }[role] })));
     const start = accountStartingPoint(accounts);
     $('account-readiness').textContent = start.ready ? `Balances ready as of ${start.date}. Available cash and reserves do not overlap.` : start.reason;
     $('use-account-balances').disabled = !start.ready;

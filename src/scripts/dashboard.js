@@ -1,7 +1,13 @@
 import { createAccountController } from './accounts.js';
 import { createExplorer } from './explorer.js';
 import { parseRoute, routeHash, parentView } from './routes.js';
-import { applyOverrides, summarize, monthlySeries, baseline, project, shiftMonth } from '../lib/engine.js';
+import { applyOverrides, summarize, baseline, project, shiftMonth } from '../lib/engine.js';
+import { periodStatistics, comparePeriods, ratio, activitySeries, automaticGrouping } from '../lib/statistics.js';
+import { renderStatistics, renderMetricCards, percentage, changeText } from './statistics.js';
+import { renderTimeSeriesChart } from './charts.js';
+import { initializeChartTooltips } from './chart-tooltips.js';
+
+initializeChartTooltips();
 
 const $ = id => document.getElementById(id);
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -9,7 +15,6 @@ const number = new Intl.NumberFormat('nb-NO', { maximumFractionDigits: 0 });
 const money = cents => number.format(cents / 100) + ' kr';
 const exactNumber = new Intl.NumberFormat('nb-NO', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const exactMoney = cents => exactNumber.format(cents / 100) + ' kr';
-const shortMoney = cents => Math.abs(cents) >= 100000000 ? (cents / 100000000).toFixed(1) + 'm' : Math.abs(cents) >= 100000 ? number.format(cents / 100000) + 'k' : number.format(cents / 100);
 const dateText = date => new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' }).format(new Date(date + 'T12:00:00Z'));
 const monthText = (month, long = false) => new Intl.DateTimeFormat('en-GB', { month: long ? 'long' : 'short', year: 'numeric', timeZone: 'UTC' }).format(new Date(month + '-01T12:00:00Z'));
 const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Oslo', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
@@ -106,6 +111,7 @@ function activateRoute(route, { scroll = true, focus = false, restore = false } 
   $('topbar-view').textContent = { overview: 'Overview', forecast: 'Look ahead', transactions: 'Transactions', accounts: 'Accounts', data: 'Data & method', transaction: 'Transaction details', account: 'Account details' }[view];
   if (state.data && view === 'forecast') renderForecast();
   if (state.data && view === 'overview') renderOverview();
+  if (state.data && view === 'transactions') renderTransactions();
   if (scroll) window.scrollTo({ top: restore ? routePositions.get(routeHash(route)) || 0 : 0, behavior: 'instant' });
   if (loaded) void explorer.openRoute(route, { focus }).then(() => {
     if (restore && ['account', 'transaction'].includes(view) && routeHash(currentRoute) === routeHash(route)) window.scrollTo({ top: routePositions.get(routeHash(route)) || 0, behavior: 'instant' });
@@ -147,18 +153,49 @@ function recalculate() {
   renderOverview(); renderForecast(); renderTransactions(); renderData();
   return loaded ? explorer.openRoute(currentRoute) : Promise.resolve(true);
 }
+let overviewGroupingRange = null;
 function renderOverview() {
   const r = range(); const tx = selectedTransactions(); const s = summarize(tx);
+  const stats = periodStatistics(tx, r, state.data.metadata);
+  const comparison = comparePeriods(state.transactions, r, $('period').value, state.data.metadata);
+  const groupingRange = `${$('period').value}:${r.start}:${r.end}`;
+  if (overviewGroupingRange !== groupingRange) {
+    $('overview-grouping').value = automaticGrouping(r);
+    overviewGroupingRange = groupingRange;
+  }
+  const history = activitySeries(tx, r, state.data.metadata, $('overview-grouping').value);
+  const grouping = { day: 'Daily', week: 'Weekly', month: 'Monthly' }[history.interval];
+  const trendPoints = history.points;
+  $('cashflow-grouping').textContent = grouping;
+  $('spending-grouping').textContent = grouping;
   $('custom-range').hidden = $('period').value !== 'custom';
   $('period-caption').textContent = r.start > r.end ? 'Choose an end date on or after the start date.' : `${dateText(r.start)} – ${dateText(r.end)} · ${number.format(tx.length)} transactions · Period totals`;
   const metrics = [
-    ['Money in', s.income, 'Salary and other incoming money', '↙', ''],
-    ['Spending', s.expense, 'Bills, purchases & other outflows', '↗', ''],
-    ['External savings', s.saving, 'Money moved outside this export', '⊞', ''],
-    ['Cash change', s.net, 'Money in − spending − external savings', '≈', s.net < 0 ? 'negative' : 'positive']
+    ['Money in', s.income, 'Salary and other incoming money', '', 'income'],
+    ['Spending', s.expense, 'Bills, purchases & other outflows', '', 'expense'],
+    ['External savings', s.saving, 'Money moved outside this export', '', 'saving'],
+    ['Cash change', s.net, 'Money in − spending − external savings', s.net < 0 ? 'negative' : 'positive', 'net']
   ];
-  $('metrics').innerHTML = metrics.map(([label, amount, note, icon, color]) => `<article class="metric"><div class="metric-label">${label}<span class="metric-icon" aria-hidden="true">${icon}</span></div><div class="metric-value ${color}">${number.format(amount / 100)}<span class="unit">kr</span></div><div class="metric-note">${note}</div></article>`).join('');
-  $('cashflow-chart').innerHTML = r.start <= r.end ? barChart(monthlySeries(tx, r.start.slice(0, 7), r.end.slice(0, 7))) : '<p class="no-results">No months in this date range.</p>';
+  renderMetricCards($('metrics'), metrics.map(([label, amount, note, color, key]) => ({ label, value: money(amount), note, color, icon: { income: 'income', expense: 'expense', saving: 'saving', net: 'trend' }[key], tone: key, values: trendPoints.map(point => point[key]), trendPoints, trendLabel: trendPoints.length > 1 ? `${grouping} totals · ${dateText(trendPoints[0].date)} – ${dateText(trendPoints.at(-1).end)}` : '', change: comparison ? { text: changeText(amount, comparison.totals[key], money), note: `from ${money(comparison.totals[key])}`, color: key === 'saving' || amount === comparison.totals[key] ? '' : (key === 'expense' ? amount < comparison.totals[key] : amount > comparison.totals[key]) ? 'positive' : 'negative' } : null })));
+  $('comparison-caption').textContent = comparison ? `Compared with ${dateText(comparison.start)} – ${dateText(comparison.end)}. Arrows show the direction of change.` : $('period').value === 'all' ? 'All recorded history · no previous period comparison.' : 'Previous-period comparisons appear when the ledger covers both full date ranges.';
+  const largest = stats.largestPayment;
+  renderStatistics($('period-insights'), [
+    { label: 'Average daily spending', value: stats.dailySpending === null ? '—' : money(stats.dailySpending), note: stats.days ? `Across ${number.format(stats.days)} recorded calendar days` : 'No recorded date coverage' },
+    { label: 'Typical spending payment', value: stats.medianPayment === null ? '—' : exactMoney(stats.medianPayment), note: `Median of ${number.format(stats.spendingPayments)} spending payments` },
+    { label: 'Largest spending payment', value: largest ? money(-largest.amount) : '—', note: largest ? `${largest.description} · ${dateText(largest.date)}` : 'No spending payments', href: largest ? routeHash({ view: 'transaction', id: largest.id }) : undefined },
+    { label: 'External savings rate', value: percentage(stats.savingsRate), note: s.income > 0 ? 'External savings ÷ all money in' : 'Needs incoming money in this period' },
+  ].map((item, i) => ({ ...item, icon: ['calendar', 'payment', 'expense', 'percent'][i], tone: ['expense', 'neutral', 'expense', 'saving'][i] })));
+  $('period-insights-note').textContent = stats.days ? `Daily average uses ${dateText(stats.start)} – ${dateText(stats.end)}, including days without recorded spending. Savings and internal transfers stay out of spending statistics.` : 'Choose dates within your recorded history to see daily averages.';
+  const labels = point => history.interval === 'month' ? monthText(point.date.slice(0, 7)) : dateText(point.date).replace(/ \d{4}$/, '');
+  const historyNote = `${{ day: 'Daily', week: '7-day', month: 'Monthly' }[history.interval]} totals within recorded coverage. The first and last periods can be partial.`;
+  renderTimeSeriesChart($('spending-trend-chart'), { points: tx.length ? history.points : [], series: [{ key: 'expense', name: 'Spending', color: 'var(--chart-out)' }], title: 'Spending over time in NOK', format: exactMoney, label: labels, width: $('spending-trend-chart').clientWidth });
+  $('spending-trend-note').textContent = `${historyNote} Savings and internal transfers are excluded.`;
+  let running = 0;
+  const cumulative = history.points.map(point => ({ ...point, cashChange: running += point.net }));
+  // Include the zero starting point so the first movement is visible.
+  const cashPoints = cumulative.length ? [{ date: cumulative[0].date, cashChange: 0, starting: true }, ...cumulative.map(point => ({ ...point, date: point.end }))] : [];
+  renderTimeSeriesChart($('cash-change-chart'), { points: tx.length ? cashPoints : [], series: [{ key: 'cashChange', name: 'Cumulative cash change', color: 'var(--chart-4)' }], title: 'Cumulative cash change in NOK', tooltipRows: point => Number.isFinite(point.net) ? [{ name: 'Cash change in this period', value: exactMoney(point.net) }] : [], format: exactMoney, label: point => point.starting ? 'Start' : dateText(point.date).replace(/ \d{4}$/, ''), width: $('cash-change-chart').clientWidth });
+  renderCashflowChart(tx.length ? history.points : [], grouping, labels);
   const b = state.base; const net = b.income - b.expense - b.saving;
   $('outlook-title').textContent = b.months ? net < 0 ? 'Your current pace uses more cash.' : 'Your current pace leaves some room.' : 'A little more history is needed.';
   $('outlook-copy').textContent = b.months ? `${money(Math.abs(net))} ${net < 0 ? 'less' : 'more'} available cash per month, if recent regular income and outflows continue.` : 'There are no complete months to estimate a baseline. Enter your monthly assumptions in Look ahead.';
@@ -174,32 +211,8 @@ function renderOverview() {
   $('review-title').textContent = `${number.format(review)} transactions could use your context`;
   $('review-banner').hidden = review === 0;
 }
-function chartTicks(max, min = 0) {
-  const rough = (max - min || 100000) / 4;
-  const power = 10 ** Math.floor(Math.log10(rough));
-  const factor = [1, 2, 5, 10].find(n => n * power >= rough);
-  const step = factor * power;
-  const top = Math.max(step, Math.ceil(max / step) * step);
-  const bottom = Math.min(0, Math.floor(min / step) * step);
-  const values = []; for (let n = bottom; n <= top; n += step) values.push(n);
-  return { top, bottom, values };
-}
-function barChart(series) {
-  if (!series.length) return '<p class="no-results">No transactions in this period.</p>';
-  const w = Math.max(280, $('cashflow-chart').clientWidth || 760), h = 240, left = 42, right = 10, top = 15, bottom = 37;
-  const max = Math.max(...series.flatMap(m => [m.income, m.expense + m.saving]));
-  const ticks = chartTicks(max); const plotHeight = h - top - bottom;
-  const y = n => top + plotHeight * (1 - n / ticks.top);
-  const gap = (w - left - right) / series.length;
-  const bar = Math.min(23, gap * .28);
-  let svg = `<svg viewBox="0 0 ${w} ${h}" role="img" aria-label="Monthly incoming and outgoing cash in NOK"><title>Money in and out. Each pair of bars is one month; outgoing cash includes external savings.</title>`;
-  svg += ticks.values.map(n => `<line x1="${left}" x2="${w - right}" y1="${y(n)}" y2="${y(n)}" stroke="var(--chart-grid)"/><text x="${left - 9}" y="${y(n) + 3}" text-anchor="end" fill="var(--chart-label)" font-size="10">${shortMoney(n)}</text>`).join('');
-  const stride = Math.max(1, Math.ceil(series.length / Math.max(2, Math.floor(w / 85))));
-  svg += series.map((m, i) => {
-    const x = left + gap * (i + .5); const out = m.expense + m.saving;
-    return `<g><title>${monthText(m.month, true)}: in ${money(m.income)}, out ${money(out)}, cash change ${money(m.net)}</title><rect x="${x - bar - 2}" y="${y(m.income)}" width="${bar}" height="${plotHeight * m.income / ticks.top}" fill="var(--chart-in)"/><rect x="${x + 2}" y="${y(out)}" width="${bar}" height="${plotHeight * out / ticks.top}" fill="var(--chart-out)"/>${i % stride === 0 || i === series.length - 1 ? `<text x="${x}" y="${h - 12}" text-anchor="middle" fill="var(--chart-label)" font-size="10">${esc(monthText(m.month))}</text>` : ''}</g>`;
-  }).join('');
-  return svg + '</svg>';
+function renderCashflowChart(series, grouping, label) {
+  renderTimeSeriesChart($('cashflow-chart'), { points: series.map(point => ({ ...point, outgoing: point.expense + point.saving })), series: [{ key: 'income', name: 'Money in', color: 'var(--chart-in)' }, { key: 'outgoing', name: 'Money out', color: 'var(--chart-out)' }], title: `${grouping} incoming and outgoing cash in NOK`, format: exactMoney, label, width: $('cashflow-chart').clientWidth, type: 'bar' });
 }
 function fieldCents(id, allowBlank = false) {
   const input = $(id); const value = input.value.trim();
@@ -224,13 +237,21 @@ function renderForecast() {
   const invalid = !accountBalancesReady || [cash ?? 0, savings, buffer, adjustment, oneOff, ...Object.values(a)].some(n => !Number.isFinite(n)) || !/^\d{4}-\d{2}-\d{2}$/.test(balanceDate) || a.expense + adjustment < 0 || (!b.months && ['income', 'expense', 'saving'].some(key => state.assumptions[key] === undefined));
   const p = !invalid ? project({ cash, savings, buffer, ...a, adjustment, oneOff, horizon: state.horizon, asOf: balanceDate }) : null;
   state.projection = p;
-  $('forecast-chart').innerHTML = p ? lineChart(cash, p, buffer, balanceDate) : `<div class="empty-state"><div class="empty-state-icon" aria-hidden="true">↗</div><h3>${invalid ? 'Check your assumptions.' : 'Start with what you have.'}</h3><p>${invalid ? 'Enter valid balances, a balance date, and nonnegative monthly amounts. A spending change cannot reduce total spending below zero. With no complete history, set all three monthly assumptions.' : 'Enter your available cash on the left. Then explore how your recent income and spending could shape the next few months.'}</p></div>`;
+  if (p) renderForecastChart(cash, p, buffer, balanceDate);
+  else $('forecast-chart').innerHTML = `<div class="empty-state"><div class="empty-state-icon" aria-hidden="true">↗</div><h3>${invalid ? 'Check your assumptions.' : 'Start with what you have.'}</h3><p>${invalid ? 'Enter valid balances, a balance date, and nonnegative monthly amounts. A spending change cannot reduce total spending below zero. With no complete history, set all three monthly assumptions.' : 'Enter your available cash on the left. Then explore how your recent income and spending could shape the next few months.'}</p></div>`;
   const net = a.income - a.expense - a.saving - adjustment;
-  $('forecast-stats').innerHTML = [
+  renderStatistics($('forecast-stats'), [
     ['Monthly cash change', Number.isFinite(net) ? money(net) : '—', net < 0 ? 'negative' : 'positive'],
     [`Cash after ${state.horizon} month${state.horizon === 1 ? '' : 's'}`, p ? money(p.endBalance) : '—', p?.endBalance < 0 ? 'negative' : ''],
     ['Peak reserve needed', p ? money(p.reserveNeeded) : '—', p?.reserveNeeded > 0 ? 'negative' : '']
-  ].map(([label, value, color]) => `<div><div class="forecast-stat-label">${label}</div><div class="forecast-stat-value ${color}">${value}</div></div>`).join('');
+  ].map(([label, value, color], i) => ({ label, value, color, icon: ['trend', 'balance', 'saving'][i], tone: ['net', 'income', 'saving'][i], note: ['Regular monthly income minus planned outflows', 'Before any reserve withdrawals', 'At the lowest monthly checkpoint'][i], ...(p && i === 1 ? { values: [cash, ...p.points.map(point => point.balance)], trendPoints: [{ date: balanceDate, starting: true }, ...p.points] } : {}) })));
+  const lowest = p ? p.points.reduce((low, point) => point.balance < low.balance ? point : low, { date: balanceDate, balance: cash }) : null;
+  const impact = p ? -adjustment * state.horizon - oneOff : null;
+  renderStatistics($('scenario-insights'), [
+    { label: 'Income committed', value: p ? percentage(ratio(a.expense + a.saving + adjustment, a.income)) : '—', note: p && a.income <= 0 ? 'Needs positive regular monthly income' : 'Monthly spending + external savings ÷ regular income; excludes one-off expense' },
+    { label: 'Scenario cash impact', value: impact === null ? '—' : money(impact), note: `Versus unchanged spending over ${state.horizon} months; includes the one-off expense`, color: impact === null || impact === 0 ? '' : impact < 0 ? 'negative' : 'positive' },
+    { label: 'Lowest cash checkpoint', value: lowest ? money(lowest.balance) : '—', note: lowest ? `${dateText(lowest.date)} · includes starting cash; before reserve withdrawals` : 'Enter valid starting balances and assumptions' },
+  ].map((item, i) => ({ ...item, icon: ['percent', 'trend', 'balance'][i], tone: ['expense', 'net', 'income'][i] })));
   $('forecast-message').classList.toggle('warning', !!p && (p.reserveNeeded > 0 || p.monthlyNet < 0));
   if (!p) $('forecast-message').textContent = invalid ? 'Correct the inputs above to calculate a forecast.' : 'Your balances and assumptions are saved in your private ledger. Public source and images contain no financial data.';
   else if (p.reserveNeeded > 0) $('forecast-message').textContent = `At the lowest monthly checkpoint, you would need ${money(p.reserveNeeded)} from your reserve to maintain your ${money(buffer)} buffer. ${p.uncovered > 0 ? `Your entered reserve falls short by ${money(p.uncovered)}.` : `Your reserve could cover it, leaving ${money(Math.max(0, savings - p.reserveNeeded))}.`} ${p.breakEvenCut > 0 ? `Reducing monthly outflows by ${money(p.breakEvenCut)} would stop the ongoing cash decline.` : ''}`;
@@ -238,15 +259,11 @@ function renderForecast() {
   else $('forecast-message').textContent = `This scenario ends ${money(p.headroom)} above your chosen buffer. Monthly cash ${p.monthlyNet === 0 ? 'stays level' : `grows by ${money(p.monthlyNet)}`}. This is end-of-period headroom; payment timing within the month is not modeled.`;
   $('forecast-table').innerHTML = p ? `<div class="table-scroll"><table><thead><tr><th>Date</th><th class="numeric">Cash change</th><th class="numeric">Available cash*</th><th class="numeric">Reserve needed*</th></tr></thead><tbody>${p.points.map((point, i) => `<tr><td>${dateText(point.date)}</td><td class="numeric ${p.monthlyNet - (i === 0 ? oneOff : 0) < 0 ? 'negative' : 'positive'}">${money(p.monthlyNet - (i === 0 ? oneOff : 0))}</td><td class="numeric ${point.balance < 0 ? 'negative' : ''}">${money(point.balance)}</td><td class="numeric">${money(point.reserveNeeded)}</td></tr>`).join('')}</tbody></table></div><p class="input-note">*Cash before drawing from savings. Reserve needed is cumulative to restore the buffer at each date. Negative cash shows a shortfall. Do not add the reserve-needed rows together.</p>` : '<p class="no-results">Your monthly estimates will appear once your starting balance is entered.</p>';
 }
-function lineChart(cash, projection, buffer, balanceDate) {
-  const points = [{ date: balanceDate, balance: cash }, ...projection.points];
-  const w = Math.max(280, $('forecast-chart').clientWidth || 740), h = 280, left = 43, right = 30, top = 28, bottom = 40;
-  const ticks = chartTicks(Math.max(cash, ...points.map(p => p.balance), buffer), Math.min(0, ...points.map(p => p.balance)));
-  const y = n => top + (h - top - bottom) * (ticks.top - n) / (ticks.top - ticks.bottom);
-  const x = i => left + (w - left - right) * i / (points.length - 1);
-  const line = points.map((p, i) => `${i ? 'L' : 'M'}${x(i)},${y(p.balance)}`).join(' ');
-  const color = projection.endBalance < buffer ? 'var(--chart-warning)' : 'var(--chart-positive)';
-  return `<svg viewBox="0 0 ${w} ${h}" role="img" aria-label="Projected available cash in NOK"><title>Cash projection: starts at ${money(cash)}, ends at ${money(projection.endBalance)}. Buffer ${money(buffer)}.</title><defs><linearGradient id="forecast-fill" x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stop-color="${color}" stop-opacity=".12"/><stop offset="100%" stop-color="${color}" stop-opacity=".01"/></linearGradient></defs>${ticks.values.map(n => `<line x1="${left}" x2="${w - right}" y1="${y(n)}" y2="${y(n)}" stroke="${n === 0 ? 'var(--border-strong)' : 'var(--chart-grid)'}"/><text x="${left - 10}" y="${y(n) + 3}" text-anchor="end" fill="var(--chart-label)" font-size="10">${shortMoney(n)}</text>`).join('')}<path d="${line} L${x(points.length - 1)},${y(ticks.bottom)} L${x(0)},${y(ticks.bottom)} Z" fill="url(#forecast-fill)"/><line x1="${left}" x2="${w - right}" y1="${y(buffer)}" y2="${y(buffer)}" stroke="var(--border-strong)" stroke-dasharray="5 5"/><text x="${w - right}" y="${y(buffer) - 7}" text-anchor="end" fill="var(--chart-label)" font-size="10">Buffer ${money(buffer)}</text><path d="${line}" stroke="${color}" stroke-width="2.5" fill="none" stroke-linejoin="round"/>${points.map((p, i) => `<g><title>${dateText(p.date)}: ${money(p.balance)}</title><circle cx="${x(i)}" cy="${y(p.balance)}" r="5" fill="var(--bg-1)" stroke="${color}" stroke-width="2"/><text x="${x(i)}" y="${h - 14}" text-anchor="middle" fill="var(--chart-label)" font-size="10">${i ? dateText(p.date).replace(/ \d{4}$/, '') : 'Starting cash'}</text></g>`).join('')}</svg>`;
+function renderForecastChart(cash, projection, buffer, balanceDate) {
+  const a = activeAssumptions();
+  const unchanged = project({ cash, ...a, horizon: state.horizon, asOf: balanceDate, buffer });
+  const points = [{ date: balanceDate, balance: cash, unchanged: cash }, ...projection.points.map((point, i) => ({ ...point, unchanged: unchanged.points[i].balance }))];
+  renderTimeSeriesChart($('forecast-chart'), { points, series: [{ key: 'unchanged', name: 'Unchanged spending · no one-off', color: 'var(--chart-label)', dashed: true }, { key: 'balance', name: 'Your scenario', color: 'var(--chart-4)' }], references: [{ name: 'Cash buffer', value: buffer }], title: 'Forecast cash: your scenario and unchanged spending', tooltipRows: point => [{ name: 'Scenario difference', value: exactMoney(point.balance - point.unchanged) }], format: exactMoney, label: point => dateText(point.date), width: $('forecast-chart').clientWidth });
 }
 function filteredTransactions() {
   const query = $('search').value.toLocaleLowerCase().trim();
@@ -265,6 +282,17 @@ function renderTransactions() {
   state.page = Math.max(0, Math.min(state.page, Math.ceil(tx.length / perPage) - 1));
   const shown = tx.slice(state.page * perPage, (state.page + 1) * perPage);
   $('transaction-count').textContent = `${number.format(tx.length)} matches`;
+  const totals = summarize(tx);
+  const transactionRange = $('transaction-period').value === 'all' ? { start: state.data.metadata.firstDate || today, end: state.data.metadata.lastDate || today } : range();
+  const history = activitySeries(tx, transactionRange, state.data.metadata);
+  renderStatistics($('transaction-statistics'), [
+    { label: 'Money in', value: money(totals.income), note: 'Salary and other incoming money' },
+    { label: 'Spending', value: money(totals.expense), note: 'Bills, purchases & other outflows' },
+    { label: 'External savings', value: money(totals.saving), note: 'Money moved outside this export' },
+    { label: 'Cash change', value: money(totals.net), note: `${number.format(tx.filter(t => t.kind === 'transfer').length)} internal transfer entries excluded`, color: totals.net < 0 ? 'negative' : totals.net > 0 ? 'positive' : '' },
+  ].map((item, i) => ({ ...item, icon: ['income', 'expense', 'saving', 'trend'][i], tone: ['income', 'expense', 'saving', 'net'][i], values: history.points.map(point => point[['income', 'expense', 'saving', 'net'][i]]), trendPoints: history.points })));
+  renderTimeSeriesChart($('transaction-trend-chart'), { points: tx.length ? history.points : [], series: [{ key: 'income', name: 'Money in', color: 'var(--chart-in)' }, { key: 'expense', name: 'Spending', color: 'var(--chart-out)' }, { key: 'saving', name: 'External savings', color: 'var(--chart-3)' }], title: 'Filtered transaction activity in NOK', format: exactMoney, label: point => history.interval === 'month' ? monthText(point.date.slice(0, 7)) : dateText(point.date).replace(/ \d{4}$/, ''), width: $('transaction-trend-chart').clientWidth, empty: 'No transactions match these filters.' });
+  $('transaction-trend-note').textContent = `${{ day: 'Daily', week: '7-day', month: 'Monthly' }[history.interval]} totals for all matching pages. First and last periods may be partial. Internal transfers are excluded.`;
   const kindLabels = { expense: 'Spending', income: 'Money in', saving: 'Savings', transfer: 'Transfer' };
   $('transaction-rows').innerHTML = shown.length ? shown.map(t => { const node = explorer.endpointForAccount(t.accountId); return `<tr><td>${dateText(t.date)}<small>${node ? explorer.endpointLink(node) : esc(t.account || 'Unknown account')}</small></td><td><a class="ledger-link" href="${esc(routeHash({ view: 'transaction', id: t.id }))}">${esc(t.description || 'Untitled transaction')}</a>${t.review ? '<small class="review-tag">● Needs review</small>' : ''}${t.excludeForecast ? '<small>One-off · excluded from forecast</small>' : ''}</td><td>${esc(t.category)}<small>${esc(t.subcategory)}</small></td><td><span class="badge ${t.kind}">${kindLabels[t.kind]}</span></td><td class="numeric ${t.amount > 0 ? 'positive' : ''}">${t.amount > 0 ? '+' : ''}${money(t.amount)}</td><td><button class="edit-button" data-edit="${esc(t.id)}" aria-label="Review ${esc(t.description)}">Edit</button></td></tr>`; }).join('') : '<tr><td colspan="6" class="no-results">No transactions match these filters.</td></tr>';
   $('page-label').textContent = tx.length ? `${state.page * perPage + 1}–${Math.min((state.page + 1) * perPage, tx.length)} of ${number.format(tx.length)}` : '0 transactions';
@@ -352,6 +380,10 @@ document.addEventListener('click', event => {
   }
 });
 $('period').addEventListener('change', () => { state.page = 0; renderOverview(); renderTransactions(); });
+$('overview-grouping').addEventListener('change', () => renderOverview());
+$('overview-scale').addEventListener('change', () => renderOverview());
+$('forecast-scale').addEventListener('change', () => renderForecast());
+$('transactions-scale').addEventListener('change', () => renderTransactions());
 for (const id of ['range-start', 'range-end']) $(id).addEventListener('change', () => { state.page = 0; renderOverview(); renderTransactions(); });
 for (const id of ['search', 'category-filter', 'kind-filter', 'transaction-period', 'transaction-sort', 'review-only', 'excluded-only']) $(id).addEventListener(id === 'search' ? 'input' : 'change', () => { state.page = 0; renderTransactions(); });
 $('clear-filters').addEventListener('click', () => { clearFilters(); renderTransactions(); });
@@ -438,10 +470,18 @@ if (!location.hash || location.hash !== routeHash(currentRoute)) history.replace
 activateRoute(currentRoute, { scroll: false });
 try { await loadLocal(); } catch (error) { handleError(error); }
 let resizeTimeout;
-window.addEventListener('resize', () => { clearTimeout(resizeTimeout); resizeTimeout = setTimeout(() => { if (!state.data) return; if (state.view === 'overview') renderOverview(); if (state.view === 'forecast') renderForecast(); }, 100); });
+window.addEventListener('resize', () => { clearTimeout(resizeTimeout); resizeTimeout = setTimeout(() => { if (!state.data) return; if (state.view === 'overview') renderOverview(); if (state.view === 'forecast') renderForecast(); if (state.view === 'transactions') renderTransactions(); if (state.view === 'account') explorer.redrawCharts(); }, 100); });
 $('sign-out')?.addEventListener('click', async () => {
   try { await api('/api/session', { method: 'DELETE', body: {} }); location.assign('/login'); }
   catch (error) { toast(error.message); }
 });
 
 window.addEventListener('saga:themechange', () => { if (!state.data) return; if (state.view === 'overview') renderOverview(); if (state.view === 'forecast') renderForecast(); });
+
+window.addEventListener('saga:chartscaledefaultchange', () => {
+  if (!state.data) return;
+  if (state.view === 'overview') renderOverview();
+  if (state.view === 'forecast') renderForecast();
+  if (state.view === 'transactions') renderTransactions();
+  if (state.view === 'account') explorer.redrawCharts();
+});

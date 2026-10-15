@@ -2,11 +2,12 @@
 import '../styles/fonts.css';
 import '../styles/theme.css';
 import '../styles/dashboard.css';
+import { CHART_SCALES, DEFAULT_CHART_SCALE } from '../scripts/page-chart-scale.js';
 import { THEMES } from '../scripts/themes.js';
 const canSignOut = Astro.cookies.has('saga_fe_session');
 ---
 <!doctype html>
-<html lang="en" data-theme="bjornarhagen" data-mode="dark" data-mode-preference="dark" data-theme-options={THEMES.map(theme => theme.id).join(',')}>
+<html lang="en" data-theme="bjornarhagen" data-mode="dark" data-mode-preference="dark" data-motion-preference="system" data-chart-scale-default={DEFAULT_CHART_SCALE} data-chart-scale-options={CHART_SCALES.map(scale => scale.id).join(',')} data-theme-options={THEMES.map(theme => theme.id).join(',')}>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
@@ -42,6 +43,18 @@ const canSignOut = Astro.cookies.has('saga_fe_session');
                 <option value="system">Follow system</option>
               </select>
               <p id="mode-description" class="appearance-description">Follow system uses your device’s light or dark setting. Preferences stay in this browser.</p>
+              <label for="motion-select">Motion</label>
+              <select id="motion-select" aria-describedby="motion-description">
+                <option value="system">Follow system</option>
+                <option value="full">Full motion</option>
+                <option value="reduce">Reduced motion</option>
+              </select>
+              <p id="motion-description" class="appearance-description">Follow system uses your device’s motion preference. Reduced motion shows numbers immediately and turns off transitions.</p>
+              <label for="default-chart-scale-select">Default chart scale</label>
+              <select id="default-chart-scale-select" aria-describedby="default-chart-scale-description">
+                {CHART_SCALES.map(scale => <option value={scale.id} selected={scale.id === DEFAULT_CHART_SCALE}>{scale.label}</option>)}
+              </select>
+              <p id="default-chart-scale-description" class="appearance-description">Used when a page’s Chart scale is set to Default. You can override it on each page. Preferences stay in this browser.</p>
             </div>
           </details>
           <button id="import-button" class="chrome-button" aria-label="Import ledger data">↑ <span>Import data</span></button>

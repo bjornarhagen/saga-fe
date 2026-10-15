@@ -1,5 +1,5 @@
 import { digest } from './adapters.js';
-import { applyOverrides } from '../lib/engine.js';
+import { applyOverrides, shiftMonth } from '../lib/engine.js';
 import { classifyEndpointEvidence } from '../lib/evidence.js';
 import { ValidationError } from './validation.js';
 
@@ -150,25 +150,40 @@ export function projectActivity({ transactions, overrides, accounts, accountIden
   const detailEndpoint = node => node ? { ...publicEndpoint(node), identifiers: node.identifiers } : null;
   const clean = row => { const { sourceId, sourceAdapter, ...value } = row; return value; };
   const candidatesFor = (flow, endpointIds) => flow.transactionIds.flatMap(id => candidatesByTransaction.get(id) || []).filter(candidate => endpointIds.has(candidate.endpointId));
-  const summary = (selectedFlows, endpointIds, filter = 'active') => {
-    let incoming = 0n, outgoing = 0n; const ids = new Set(), selected = [];
+  const summary = (selectedFlows, endpointIds, filter = 'active', includeMonthly = false) => {
+    let incoming = 0n, outgoing = 0n, incomingPayments = 0, outgoingPayments = 0, largestPayment = 0; const ids = new Set(), selected = [];
+    const byMonth = new Map();
     for (const flow of selectedFlows) {
       const candidates = candidatesFor(flow, endpointIds).filter(candidate => accepted(candidate.status, filter));
       if (!candidates.length) continue;
       selected.push(flow);
-      if (candidates.some(candidate => candidate.side === 'to')) incoming += BigInt(flow.amount);
-      if (candidates.some(candidate => candidate.side === 'from')) outgoing += BigInt(flow.amount);
+      const comesIn = candidates.some(candidate => candidate.side === 'to'), goesOut = candidates.some(candidate => candidate.side === 'from');
+      if (comesIn) { incoming += BigInt(flow.amount); if (flow.amount > 0) incomingPayments++; }
+      if (goesOut) { outgoing += BigInt(flow.amount); if (flow.amount > 0) outgoingPayments++; }
+      largestPayment = Math.max(largestPayment, flow.amount);
+      if (includeMonthly) {
+        const month = flow.date.slice(0, 7);
+        if (!byMonth.has(month)) byMonth.set(month, { month, incoming: 0, outgoing: 0, payments: 0 });
+        const item = byMonth.get(month);
+        item.incoming += comesIn ? flow.amount : 0;
+        item.outgoing += goesOut ? flow.amount : 0;
+        item.payments++;
+      }
       for (const id of flow.transactionIds) ids.add(id);
     }
-    return { incoming: exactNumber(incoming), outgoing: exactNumber(outgoing), net: exactNumber(incoming - outgoing), payments: selected.length, transactionRows: ids.size, internalPayments: selected.filter(flow => flow.internal).length, firstDate: selected.at(-1)?.date || null, lastDate: selected[0]?.date || null };
+    const monthly = [];
+    if (includeMonthly && selected.length) for (let month = selected.at(-1).date.slice(0, 7); month <= selected[0].date.slice(0, 7); month = shiftMonth(month, 1)) {
+      monthly.push(byMonth.get(month) || { month, incoming: 0, outgoing: 0, payments: 0 });
+    }
+    return { incoming: exactNumber(incoming), outgoing: exactNumber(outgoing), net: exactNumber(incoming - outgoing), incomingPayments, outgoingPayments, largestPayment, payments: selected.length, transactionRows: ids.size, internalPayments: selected.filter(flow => flow.internal).length, firstDate: selected.at(-1)?.date || null, lastDate: selected[0]?.date || null, ...(includeMonthly ? { monthly } : {}) };
   };
   const nodeFlows = new Map([...nodes.keys()].map(id => [id, []])), nodeRows = new Map([...nodes.keys()].map(id => [id, []]));
   for (const flow of flows) for (const id of new Set(flow.transactionIds.flatMap(transactionId => (candidatesByTransaction.get(transactionId) || []).map(candidate => candidate.endpointId)))) nodeFlows.get(id)?.push(flow);
   for (const row of effective) for (const id of new Set((candidatesByTransaction.get(row.id) || []).map(candidate => candidate.endpointId))) nodeRows.get(id)?.push(row);
-  const summariesFor = id => Object.fromEntries(statuses.map(status => [status, summary(nodeFlows.get(id) || [], new Set([id]), status)]));
+  const summariesFor = (id, includeMonthly = false) => Object.fromEntries(statuses.map(status => [status, summary(nodeFlows.get(id) || [], new Set([id]), status, includeMonthly)]));
   const endpointActivity = requestedId => {
     const id = endpointAliases.get(requestedId) || requestedId, node = nodes.get(id); if (!node) return null;
-    const selected = nodeFlows.get(id) || [], summaries = summariesFor(id), totals = summaries.active;
+    const selected = nodeFlows.get(id) || [], summaries = summariesFor(id, true), totals = summaries.active;
     const activityRows = (nodeRows.get(id) || []).map(row => {
       const memberships = (candidatesByTransaction.get(row.id) || []).filter(candidate => candidate.endpointId === id);
       const flow = flowByTransaction.get(row.id), sides = new Set(memberships.map(member => member.side));
@@ -176,7 +191,7 @@ export function projectActivity({ transactions, overrides, accounts, accountIden
       const chosen = memberships.find(item => item.status === 'confirmed') || memberships.find(item => item.status === 'owned') || memberships.find(item => item.status === 'suggested') || memberships[0];
       return { ...clean(row), flowId: flow.id, flowCategory: flow.category, flowDirection: direction, flowAmount: ['self', 'unknown'].includes(direction) ? 0 : Math.abs(row.amount) * (direction === 'incoming' ? 1 : -1), pairedRows: flow.pairedRows, memberships, membershipStatus: chosen.status, membershipSide: sides.size > 1 ? 'both' : chosen.side, membershipProvenance: chosen.provenance, membershipExplicit: chosen.explicit };
     });
-    const categorySummaries = Object.fromEntries(statuses.map(status => [status, [...new Set(selected.map(flow => flow.category))].map(category => ({ category, ...summary(selected.filter(flow => flow.category === category), new Set([id]), status) })).filter(category => category.payments > 0)]));
+    const categorySummaries = Object.fromEntries(statuses.map(status => [status, [...new Set(selected.map(flow => flow.category))].map(category => ({ category, ...summary(selected.filter(flow => flow.category === category), new Set([id]), status, true) })).filter(category => category.payments > 0)]));
     return { endpoint: detailEndpoint(node), summary: totals, summaries, categorySummaries, transactions: activityRows, flows: selected, coverage: { firstDate: selected.at(-1)?.date || null, lastDate: selected[0]?.date || null, allHistory: true }, notes: ['Totals describe imported movement, not an opening or current balance. Source suggestions are separate from account memberships confirmed by you.', 'Matched debit and credit rows of an internal bank transfer count as one payment in totals; both original transaction rows remain visible. Without bank transaction IDs, same-day same-amount transfer leg matching is inferred.'] };
   };
   return {

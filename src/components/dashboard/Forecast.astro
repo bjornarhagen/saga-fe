@@ -1,5 +1,8 @@
+---
+import ChartScale from './ChartScale.astro';
+---
 <section id="forecast-view" class="view" hidden>
-  <header class="page-heading"><div><p class="eyebrow">02 / CASH-FLOW PROJECTIONS</p><h1>A little foresight.</h1><p class="subtitle">Try a change today. See what it means in one, two, or three months.</p></div></header>
+  <header class="page-heading"><div><p class="eyebrow">02 / CASH-FLOW PROJECTIONS</p><h1>A little foresight.</h1><p class="subtitle">Try a change today. See what it means in one, two, or three months.</p></div><ChartScale id="forecast-scale" /></header>
   <div class="forecast-layout">
     <article class="card assumptions"><div class="card-heading"><div><p class="eyebrow">START HERE</p><h2>Your starting point</h2></div></div>
     <label>Starting balances<select id="balance-source"><option value="manual">Enter a combined starting point</option><option value="accounts">Use saved account balances</option></select></label>
@@ -23,11 +26,12 @@
       <article class="card"><div class="card-heading"><div><p class="eyebrow">YOUR POSSIBLE PATH</p><h2>Cash over time</h2></div><div class="segments" id="horizon-buttons" aria-label="Forecast horizon"><button data-horizon="1">1 month</button><button data-horizon="2">2 months</button><button data-horizon="3" class="selected">3 months</button></div></div>
         <div class="scenario-row"><span class="muted small">Try a scenario</span><button data-scenario="same" class="scenario selected">Current pace</button><button data-scenario="less" class="scenario">Spend 10% less</button><button data-scenario="more" class="scenario">Spend 10% more</button></div>
         <div id="forecast-chart" class="forecast-chart"></div>
-        <div id="forecast-stats" class="forecast-stats"></div>
+        <dl id="forecast-stats" class="statistics-grid statistics-grid-three forecast-stat-cards"></dl>
         <div class="scenario-inputs"><label>Monthly spending change <span>NOK / month</span><input id="adjustment" type="number" step="0.01" value="0"><small>Negative means spending less.</small></label><label>One-off expense in month 1 <span>NOK</span><input id="one-off" type="number" min="0" step="0.01" value="0"></label></div>
         <div id="forecast-message" class="forecast-message" aria-live="polite"></div>
       </article>
       <article class="card"><div class="card-heading"><h2>Month by month</h2><span class="muted small">Rolling monthly estimates</span></div><div id="forecast-table"></div></article>
+      <article class="card" aria-labelledby="scenario-insights-title"><div class="card-heading"><div><p class="eyebrow">PUT THE SCENARIO IN CONTEXT</p><h2 id="scenario-insights-title">What shapes your forecast</h2></div></div><dl id="scenario-insights" class="statistics-grid statistics-grid-three"></dl></article>
       <details class="method-note"><summary>How this forecast works</summary><p>The baseline uses the average of completed months before the latest export date. Regular income uses rows marked as salary or “Inntekt”. Other incoming money, refunds, and interest do not become recurring income automatically. All non-transfer outflows are included in spending or external savings.</p><p>Cash = starting cash + regular income − spending − external savings − spending change. The one-off expense is subtracted in month 1. Savings reserve is shown separately and is not automatically withdrawn. Internal transfers are excluded. Mark one-off historical transactions in Transactions to leave them out of the baseline.</p><p>Monthly amounts are held constant. This estimate does not model payday, bill dates, interest, tax changes, or daily cash lows. End-of-month estimates can look healthy even if a bill is due before payday. It is a scenario calculation, not a bank balance or a guarantee.</p></details>
     </div>
   </div>

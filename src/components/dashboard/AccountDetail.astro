@@ -1,3 +1,6 @@
+---
+import ChartScale from './ChartScale.astro';
+---
 <section id="account-view" class="view detail-view" aria-labelledby="account-detail-title" hidden>
   <header class="page-heading detail-page-heading">
     <div>
@@ -6,10 +9,13 @@
       <h1 id="account-detail-title" tabindex="-1">Account details.</h1>
       <p class="subtitle">Explore the saved information and payments involving this account or sender/receiver.</p>
     </div>
+    <ChartScale id="account-scale" />
   </header>
   <p id="account-detail-status" class="detail-status" role="status" aria-live="polite"></p>
   <p id="endpoint-membership-save-status" class="detail-status" role="status" aria-live="polite"></p>
   <div id="account-detail-summary" class="metrics endpoint-summary"></div>
+  <article id="account-activity-statistics" class="card statistics-card" aria-labelledby="account-activity-title"><div class="card-heading"><div><p class="eyebrow">PAYMENT PATTERNS</p><h2 id="account-activity-title">Activity in perspective</h2></div></div><dl id="account-activity-insights" class="statistics-grid statistics-grid-three"></dl><p class="input-note">Uses the account confirmation and category selected below, across all saved dates. Mirrored internal transfer entries count as one payment.</p></article>
+  <article id="account-activity-chart-card" class="card statistics-card" aria-labelledby="account-activity-chart-title"><div class="card-heading"><div><p class="eyebrow">THE LONGER VIEW</p><h2 id="account-activity-chart-title">Payment activity over time</h2></div><span class="badge">Monthly</span></div><div id="account-activity-chart"></div><p class="chart-note">Follows account confirmation and category across all saved dates. First and last months may be partial. Includes internal movement for this account; paired transfer entries count once. Search and direction filter the history list only.</p></article>
   <div class="detail-grid endpoint-detail-grid">
     <article class="card detail-info-card" aria-labelledby="account-detail-info-title">
       <div class="card-heading"><h2 id="account-detail-info-title">Saved information</h2></div>

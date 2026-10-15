@@ -1,6 +1,8 @@
 import { applyRelationshipDecisions } from '../lib/relationships.js';
 import { routeHash } from './routes.js';
 import { createMembershipController } from './memberships.js';
+import { renderStatistics, renderMetricCards } from './statistics.js';
+import { renderTimeSeriesChart } from './charts.js';
 
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const perPage = 40;
@@ -107,7 +109,24 @@ export function createExplorer({ api, exactMoney, dateText, getTransactions, edi
     const category = $('endpoint-category').value;
     const summary = (category ? categories.find(item => item.category === category) : accountDetail.summaries?.[status] || accountDetail.summary) || { incoming: 0, outgoing: 0, net: 0, payments: 0, transactionRows: 0 };
     const scope = `${accountDetail.endpoint.owned ? 'Recorded account' : $('endpoint-status').selectedOptions[0].textContent}${category ? ' · ' + category : ''}`;
-    $('account-detail-summary').innerHTML = [[accountDetail.endpoint.owned ? 'Money in' : 'Paid to this recipient', summary.incoming], [accountDetail.endpoint.owned ? 'Money out' : 'Received from this sender', summary.outgoing], [accountDetail.endpoint.owned ? 'Net movement' : 'Net paid', summary.net]].map(([label, amount]) => `<article class="metric"><div class="metric-label">${label}</div><div class="metric-value">${exactMoney(amount)}</div><div class="metric-note">${esc(scope)} · all saved dates</div></article>`).join('');
+    const monthly = summary.monthly || [];
+    renderMetricCards($('account-detail-summary'), [
+      { label: accountDetail.endpoint.owned ? 'Money in' : 'Paid to this recipient', value: exactMoney(summary.incoming), icon: 'income', tone: 'income', values: monthly.map(point => point.incoming) },
+      { label: accountDetail.endpoint.owned ? 'Money out' : 'Received from this sender', value: exactMoney(summary.outgoing), icon: 'expense', tone: 'expense', values: monthly.map(point => point.outgoing) },
+      { label: accountDetail.endpoint.owned ? 'Net movement' : 'Net paid', value: exactMoney(summary.net), icon: 'trend', tone: 'net', values: monthly.map(point => point.incoming - point.outgoing) },
+      { label: 'Payments', value: String(summary.payments), icon: 'payment', note: `${summary.transactionRows} ledger entries · ${scope}` },
+    ].map(item => ({ note: `${scope} · all saved dates`, trendLabel: 'Monthly movement', trendPoints: monthly, ...item })));
+    renderStatistics($('account-activity-insights'), [
+      { label: accountDetail.endpoint.owned ? 'Average incoming payment' : 'Average paid to recipient', value: summary.incomingPayments ? exactMoney(Math.round(summary.incoming / summary.incomingPayments)) : '—', note: `${summary.incomingPayments || 0} nonzero payments` },
+      { label: accountDetail.endpoint.owned ? 'Average outgoing payment' : 'Average received from sender', value: summary.outgoingPayments ? exactMoney(Math.round(summary.outgoing / summary.outgoingPayments)) : '—', note: `${summary.outgoingPayments || 0} nonzero payments` },
+      { label: 'Largest payment', value: summary.payments ? exactMoney(summary.largestPayment) : '—', note: 'Either direction · one payment counted once' },
+    ].map((item, i) => ({ ...item, icon: ['income', 'expense', 'payment'][i], tone: ['income', 'expense', 'net'][i] })));
+    const monthLabel = point => new Intl.DateTimeFormat('en-GB', { month: 'short', year: 'numeric', timeZone: 'UTC' }).format(new Date(point.month + '-01T12:00:00Z'));
+    // Measure the visible card; a hidden card reports zero and produces a
+    // narrow SVG that becomes oversized when stretched across a desktop.
+    $('account-activity-chart-card').hidden = false;
+    renderTimeSeriesChart($('account-activity-chart'), { points: monthly, series: [{ key: 'incoming', name: accountDetail.endpoint.owned ? 'Money in' : 'Paid to recipient', color: 'var(--chart-in)' }, { key: 'outgoing', name: accountDetail.endpoint.owned ? 'Money out' : 'Received from sender', color: 'var(--chart-out)' }], title: 'Monthly account or recipient activity in NOK', format: exactMoney, label: monthLabel, width: $('account-activity-chart').clientWidth, empty: 'No payments in this account confirmation and category scope.' });
+    $('account-activity-statistics').hidden = false;
     $('endpoint-category-groups').innerHTML = categories.length ? categories.map(item => `<button type="button" class="endpoint-category-button" data-endpoint-category="${esc(item.category)}" aria-pressed="${item.category === category}"><span>${esc(item.category)} <small>${paymentsLabel(item.payments)}</small></span><span>${accountDetail.endpoint.owned ? 'In' : 'Paid'} ${exactMoney(item.incoming)} · ${accountDetail.endpoint.owned ? 'Out' : 'Received'} ${exactMoney(item.outgoing)}</span></button>`).join('') : '<p class="no-results">No category groups for this confirmation status.</p>';
     $('endpoint-scope-note').textContent = `${paymentsLabel(summary.payments)} · ${summary.transactionRows} ledger entries. Totals follow account confirmation and category across all saved dates. Search and direction filter the history below. ${(accountDetail.notes || []).join(' ')}`;
   }
@@ -154,7 +173,7 @@ export function createExplorer({ api, exactMoney, dateText, getTransactions, edi
     $(prefix + '-title').textContent = transaction ? 'Transaction details.' : 'Account details.';
     $(prefix + '-body').innerHTML = '';
     if (transaction) { transactionDetail = null; $('transaction-membership-body').innerHTML = ''; $('edit-detail-transaction').disabled = true; renderConnections(); }
-    else { accountDetail = null; $('account-detail-summary').innerHTML = ''; $('account-detail-identifiers').innerHTML = ''; $('endpoint-category-groups').innerHTML = ''; $('endpoint-transactions').innerHTML = ''; $('endpoint-count').textContent = ''; $('endpoint-scope-note').textContent = ''; }
+    else { accountDetail = null; $('account-detail-summary').innerHTML = ''; $('account-activity-insights').innerHTML = ''; $('account-activity-statistics').hidden = true; $('account-activity-chart').innerHTML = ''; $('account-activity-chart-card').hidden = true; $('account-detail-identifiers').innerHTML = ''; $('endpoint-category-groups').innerHTML = ''; $('endpoint-transactions').innerHTML = ''; $('endpoint-count').textContent = ''; $('endpoint-scope-note').textContent = ''; }
     const membershipReadVersion = memberships.version();
     try {
       const result = await api(`/api/${transaction ? 'transactions' : 'endpoints'}/${encodeURIComponent(next.id)}`);
@@ -172,6 +191,7 @@ export function createExplorer({ api, exactMoney, dateText, getTransactions, edi
   }
   for (const id of ['endpoint-search-directory', 'endpoint-directory-scope']) $(id).addEventListener(id.includes('search') ? 'input' : 'change', () => { directoryPage = 0; renderDirectory(); });
   for (const id of ['endpoint-search', 'endpoint-direction']) $(id).addEventListener(id.includes('search') ? 'input' : 'change', () => { endpointPage = 0; renderEndpointRows(); });
+  $('account-scale').addEventListener('change', () => renderAccountGroups());
   for (const id of ['endpoint-status', 'endpoint-category']) $(id).addEventListener('change', () => { endpointPage = 0; renderAccountGroups(); renderEndpointRows(); });
   $('endpoint-category-groups').addEventListener('click', event => { const button = event.target.closest('[data-endpoint-category]'); if (!button) return; $('endpoint-category').value = $('endpoint-category').value === button.dataset.endpointCategory ? '' : button.dataset.endpointCategory; endpointPage = 0; renderAccountGroups(); renderEndpointRows(); });
   for (const [prefix, render, read, write] of [
@@ -212,6 +232,7 @@ export function createExplorer({ api, exactMoney, dateText, getTransactions, edi
     decisionError(expectedVersion = decisionVersion) { if (expectedVersion !== decisionVersion) return; decisionsAvailable = false; $('relation-save-status').textContent = 'Saved connection decisions could not be loaded. Refresh the ledger before reviewing suggestions.'; renderConnections(); },
     endpointForAccount(id) { return endpoints.find(node => node.accountId === id); },
     endpointLink, openRoute,
+    redrawCharts: renderAccountGroups,
     refresh() { return route ? openRoute(route) : Promise.resolve(); }
   };
 }

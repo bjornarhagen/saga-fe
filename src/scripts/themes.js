@@ -1,3 +1,6 @@
+import { DEFAULT_CHART_SCALE, normalizeDefaultChartScale, chartScaleLabel } from './page-chart-scale.js';
+import { normalizeMotion, resolveMotion } from './motion.js';
+
 // The theme registry is shared by the server-rendered controls and the client.
 // Theme additions need one manifest here, a CSS import, and a complete token set.
 export const THEMES = Object.freeze([
@@ -26,13 +29,32 @@ export function initializeThemes() {
   const root = document.documentElement;
   const select = document.getElementById('theme-select');
   const modeSelect = document.getElementById('mode-select');
+  const motionSelect = document.getElementById('motion-select');
+  const chartScaleSelect = document.getElementById('default-chart-scale-select');
   const description = document.getElementById('theme-description');
   const appearance = document.getElementById('appearance-control');
   const media = window.matchMedia('(prefers-color-scheme: dark)');
-  if (!select || !modeSelect || !appearance) return;
+  const motionMedia = window.matchMedia('(prefers-reduced-motion: reduce)');
+  if (!select || !modeSelect || !motionSelect || !chartScaleSelect || !appearance) return;
 
   let theme = normalizeTheme(root.dataset.theme);
   let preference = normalizeMode(root.dataset.modePreference || root.dataset.mode);
+  let motion = normalizeMotion(root.dataset.motionPreference);
+  let chartScale = normalizeDefaultChartScale(root.dataset.chartScaleDefault);
+
+  function applyChartScale() {
+    root.dataset.chartScaleDefault = chartScale;
+    chartScaleSelect.value = chartScale;
+    for (const option of document.querySelectorAll('[data-default-chart-scale]')) option.textContent = `Default: ${chartScaleLabel(chartScale)}`;
+    window.dispatchEvent(new CustomEvent('saga:chartscaledefaultchange'));
+  }
+
+  function applyMotion() {
+    root.dataset.motionPreference = motion;
+    root.dataset.motion = resolveMotion(motion, motionMedia.matches);
+    motionSelect.value = motion;
+    window.dispatchEvent(new CustomEvent('saga:motionchange'));
+  }
 
   function apply() {
     root.dataset.theme = theme;
@@ -63,11 +85,24 @@ export function initializeThemes() {
     save('saga-fe-mode', preference);
     apply();
   });
+  motionSelect.addEventListener('change', () => {
+    motion = normalizeMotion(motionSelect.value);
+    save('saga-fe-motion', motion);
+    applyMotion();
+  });
+  chartScaleSelect.addEventListener('change', () => {
+    chartScale = normalizeDefaultChartScale(chartScaleSelect.value);
+    save('saga-fe-chart-scale', chartScale);
+    applyChartScale();
+  });
+  motionMedia.addEventListener('change', () => { if (motion === 'system') applyMotion(); });
   media.addEventListener('change', () => { if (preference === 'system') apply(); });
   window.addEventListener('storage', event => {
     if (event.key === 'saga-fe-theme') theme = normalizeTheme(event.newValue);
     else if (event.key === 'saga-fe-mode') preference = normalizeMode(event.newValue);
-    else if (event.key === null) { theme = DEFAULT_THEME; preference = DEFAULT_MODE; }
+    else if (event.key === 'saga-fe-motion') { motion = normalizeMotion(event.newValue); applyMotion(); return; }
+    else if (event.key === 'saga-fe-chart-scale') { chartScale = normalizeDefaultChartScale(event.newValue); applyChartScale(); return; }
+    else if (event.key === null) { theme = DEFAULT_THEME; preference = DEFAULT_MODE; motion = 'system'; chartScale = DEFAULT_CHART_SCALE; applyMotion(); applyChartScale(); }
     else return;
     apply();
   });
@@ -81,5 +116,7 @@ export function initializeThemes() {
       appearance.querySelector('summary').focus();
     }
   });
+  applyMotion();
+  applyChartScale();
   apply();
 }

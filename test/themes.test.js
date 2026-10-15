@@ -2,7 +2,9 @@ import assert from 'node:assert/strict';
 import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import vm from 'node:vm';
 import { test } from 'node:test';
-import { DEFAULT_THEME, THEMES, normalizeTheme, normalizeMode, resolveMode } from '../src/scripts/themes.js';
+import { normalizeMotion, resolveMotion, reducedMotion } from '../src/scripts/motion.js';
+import { CHART_SCALES, DEFAULT_CHART_SCALE, normalizeDefaultChartScale, chartScaleLabel } from '../src/scripts/page-chart-scale.js';
+import { DEFAULT_THEME, DEFAULT_MODE, THEMES, normalizeTheme, normalizeMode, resolveMode, initializeThemes } from '../src/scripts/themes.js';
 
 const styles = new URL('../src/styles/', import.meta.url);
 const themeDirectory = new URL('themes/', styles);
@@ -85,7 +87,7 @@ for (const theme of THEMES) {
 }
 
 test('dashboard components consume semantic colors', () => {
-  for (const path of ['src/styles/dashboard.css', 'src/layouts/DashboardLayout.astro', 'src/scripts/dashboard.js']) {
+  for (const path of ['src/styles/dashboard.css', 'src/layouts/DashboardLayout.astro', 'src/scripts/dashboard.js', 'src/scripts/charts.js', 'src/scripts/chart-tooltips.js', 'src/scripts/statistics.js', 'src/scripts/accounts.js', 'src/scripts/explorer.js']) {
     const source = readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
     const rawColorLines = source.split('\n').filter(line => /#[\da-f]{3}(?:[\da-f]{3})?\b|rgba?\(|hsla?\(/i.test(line));
     assert.deepEqual(rawColorLines, [], `${path} contains a raw color`);
@@ -103,12 +105,12 @@ test('unknown saved preferences recover to the default and system mode resolves'
   assert.equal(resolveMode('dark', false), 'dark');
 });
 
-function beforePaint(saved, systemIsDark = false, storageThrows = false) {
+function beforePaint(saved, systemIsDark = false, storageThrows = false, systemReducesMotion = false) {
   const dataset = { theme: DEFAULT_THEME, mode: 'dark', modePreference: 'dark', themeOptions: THEMES.map(theme => theme.id).join(',') };
   vm.runInNewContext(readFileSync(new URL('../public/theme.js', import.meta.url), 'utf8'), {
     document: { documentElement: { dataset } },
     localStorage: { getItem(key) { if (storageThrows) throw new Error('Storage unavailable'); return saved[key] ?? null; } },
-    window: { matchMedia() { return { matches: systemIsDark }; } },
+    window: { matchMedia(query) { return { matches: query.includes('reduced-motion') ? systemReducesMotion : systemIsDark }; } },
   });
   return dataset;
 }
@@ -121,4 +123,92 @@ test('before-paint initialization preserves existing modes and validates saved t
   assert.equal(beforePaint(saved, false).mode, 'light');
   assert.equal(beforePaint({ 'saga-fe-theme': 'unexpected', 'saga-fe-mode': 'unexpected' }).theme, DEFAULT_THEME);
   assert.equal(beforePaint(saved, false, true).mode, 'dark');
+});
+
+
+test('motion preferences follow the OS by default and explicit choices override it before paint', () => {
+  assert.equal(normalizeMotion('unexpected'), 'system');
+  assert.equal(resolveMotion('system', true), 'reduce');
+  assert.equal(resolveMotion('system', false), 'full');
+  assert.equal(resolveMotion('full', true), 'full');
+  assert.equal(resolveMotion('reduce', false), 'reduce');
+  assert.equal(beforePaint({}, false, false, true).motion, 'reduce');
+  assert.equal(beforePaint({ 'saga-fe-motion': 'full' }, false, false, true).motion, 'full');
+  assert.equal(beforePaint({ 'saga-fe-motion': 'reduce' }).motion, 'reduce');
+  assert.equal(beforePaint({ 'saga-fe-motion': 'invalid' }).motionPreference, 'system');
+  assert.equal(beforePaint({}, false, true, true).motion, 'reduce');
+  const win = motion => ({ document: { documentElement: { dataset: { motion } } }, matchMedia: () => ({ matches: true }) });
+  assert.equal(reducedMotion(win('full')), false);
+  assert.equal(reducedMotion(win('reduce')), true);
+  assert.equal(reducedMotion(win(undefined)), true);
+});
+
+
+function appearanceHarness() {
+  const controls = new Map(), saved = new Map(), events = {};
+  const root = { dataset: { theme: DEFAULT_THEME, mode: 'dark', motionPreference: 'system' } };
+  const defaultOption = { textContent: '' };
+  const element = id => {
+    if (!controls.has(id)) controls.set(id, { value: '', addEventListener(name, callback) { this[name] = callback; } });
+    return controls.get(id);
+  };
+  const media = { matches: false, addEventListener(name, callback) { this.change = callback; } };
+  const colorMedia = { matches: true, addEventListener() {} };
+  vm.runInNewContext(`(${initializeThemes.toString()})()`, {
+    document: { documentElement: root, getElementById: element, querySelectorAll: () => [defaultOption], addEventListener() {} },
+    window: { matchMedia: query => query.includes('reduced-motion') ? media : colorMedia, dispatchEvent() {}, addEventListener: (name, callback) => { events[name] = callback; } },
+    localStorage: { setItem: (key, value) => saved.set(key, value) },
+    requestAnimationFrame() {}, CustomEvent: class {},
+    THEMES, DEFAULT_THEME, DEFAULT_MODE, DEFAULT_CHART_SCALE, normalizeTheme, normalizeMode, resolveMode, normalizeMotion, resolveMotion, normalizeDefaultChartScale, chartScaleLabel,
+  });
+  return { root, element, saved, events, media, defaultOption };
+}
+
+test('motion controls save choices, follow live OS changes only in system mode, and sync across tabs', () => {
+  const { root, element, saved, events, media } = appearanceHarness();
+  const motion = element('motion-select');
+  assert.equal(root.dataset.motion, 'full');
+  motion.value = 'full'; motion.change();
+  assert.equal(saved.get('saga-fe-motion'), 'full');
+  media.matches = true; media.change();
+  assert.equal(root.dataset.motion, 'full');
+  motion.value = 'system'; motion.change();
+  assert.equal(root.dataset.motion, 'reduce');
+  media.matches = false; media.change();
+  assert.equal(root.dataset.motion, 'full');
+  events.storage({ key: 'saga-fe-motion', newValue: 'reduce' });
+  assert.equal(motion.value, 'reduce');
+  assert.equal(root.dataset.motion, 'reduce');
+  events.storage({ key: null });
+  assert.equal(motion.value, 'system');
+  assert.equal(root.dataset.motion, 'full');
+});
+
+
+test('default chart scale starts at square root and saved choices are validated before drawing', () => {
+  assert.equal(beforePaint({}).chartScaleDefault, 'sqrt');
+  assert.equal(beforePaint({}, false, true).chartScaleDefault, 'sqrt');
+  assert.equal(beforePaint({ 'saga-fe-chart-scale': 'unknown' }).chartScaleDefault, 'sqrt');
+  for (const scale of CHART_SCALES) {
+    assert.equal(beforePaint({ 'saga-fe-chart-scale': scale.id }).chartScaleDefault, scale.id);
+  }
+});
+
+test('Appearance saves the default scale, updates Default labels, and syncs across tabs', () => {
+  const { root, element, saved, events, defaultOption } = appearanceHarness();
+  const control = element('default-chart-scale-select');
+  assert.equal(control.value, 'sqrt');
+  assert.equal(root.dataset.chartScaleDefault, 'sqrt');
+  assert.equal(defaultOption.textContent, 'Default: Square root');
+  control.value = 'log'; control.change();
+  assert.equal(saved.get('saga-fe-chart-scale'), 'log');
+  assert.equal(root.dataset.chartScaleDefault, 'log');
+  assert.equal(defaultOption.textContent, 'Default: Logarithmic');
+  events.storage({ key: 'saga-fe-chart-scale', newValue: 'linear' });
+  assert.equal(control.value, 'linear');
+  assert.equal(defaultOption.textContent, 'Default: Linear');
+  events.storage({ key: 'saga-fe-chart-scale', newValue: null });
+  assert.equal(control.value, 'sqrt');
+  events.storage({ key: null });
+  assert.equal(control.value, 'sqrt');
 });

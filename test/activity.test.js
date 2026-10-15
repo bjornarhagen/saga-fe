@@ -33,7 +33,7 @@ test('account endpoint directory covers both owned and external directions witho
   assert.equal(shop.kind, 'merchant-hint');
   assert.equal(shop.evidence.isAccountIdentifier, false);
   assert.equal(shop.name, 'fixture-shop');
-  assert.deepEqual(cash.summary, { incoming: 100055, outgoing: 5210, net: 94845, payments: 5, transactionRows: 6, internalPayments: 1, firstDate: '2026-01-01', lastDate: '2026-01-01' });
+  assert.deepEqual(cash.summary, { incoming: 100055, outgoing: 5210, net: 94845, incomingPayments: 2, outgoingPayments: 3, largestPayment: 100000, payments: 5, transactionRows: 6, internalPayments: 1, firstDate: '2026-01-01', lastDate: '2026-01-01' });
   assert.equal(reserve.summary.incoming, 5000);
   assert.equal(reserve.summary.outgoing, 0);
   assert.equal(reserve.summary.payments, 1);
@@ -271,6 +271,66 @@ test('mirrored self-transfer legs remain visible but count as one zero-net movem
   assert.equal(activity.summary.incoming, 105);
   assert.equal(activity.summary.outgoing, 105);
   assert.equal(activity.summary.net, 0);
+  assert.equal(activity.summary.incomingPayments, 1);
+  assert.equal(activity.summary.outgoingPayments, 1);
+  assert.equal(activity.summary.largestPayment, 105);
   assert.ok(activity.transactions.every(transaction => transaction.flowDirection === 'self' && transaction.flowAmount === 0));
   assert.equal(activity.flows[0].pairedRows, true);
+});
+
+
+test('payment statistics follow confirmation and category, counting mirrored transfers once', t => {
+  const store = memory(t); fixture(store);
+  const cash = store.getEndpoints().endpoints.find(endpoint => endpoint.name === 'Everyday');
+  const activity = store.getEndpointActivity(cash.id);
+  assert.equal(activity.summary.incomingPayments, 2);
+  assert.equal(activity.summary.outgoingPayments, 3);
+  assert.equal(activity.summary.largestPayment, 100000);
+  const food = activity.categorySummaries.active.find(category => category.category === 'Food');
+  assert.equal(food.outgoingPayments, 2);
+  assert.equal(food.incomingPayments, 1);
+  assert.equal(food.largestPayment, 105);
+  const reserve = store.getEndpoints().endpoints.find(endpoint => endpoint.name === 'Reserve');
+  assert.equal(reserve.summary.incomingPayments, 1);
+  assert.equal(reserve.summary.largestPayment, 5000);
+  const row = store.getTransactions().transactions.find(row => row.amount === -105);
+  store.updateAccountMembership({ transactionId: row.id, side: 'to', endpointId: row.toEndpointId, status: 'dismissed' });
+  const recipient = store.getEndpointActivity(row.toEndpointId);
+  assert.equal(recipient.summary.incomingPayments, 1);
+  assert.equal(recipient.summaries.dismissed.incomingPayments, 1);
+});
+
+
+test('zero-valued payments remain counted without becoming an average denominator', t => {
+  const store = memory(t);
+  store.ingest(bank([row({ amount: '0.00' })]));
+  const account = store.getAccounts().accounts[0];
+  const summary = store.getEndpointActivity(account.id).summary;
+  assert.equal(summary.payments, 1);
+  assert.equal(summary.incomingPayments, 0);
+  assert.equal(summary.outgoingPayments, 0);
+  assert.equal(summary.largestPayment, 0);
+});
+
+test('monthly endpoint history reconciles totals across gaps, categories and account confirmations', t => {
+  const store = memory(t); fixture(store);
+  store.ingest(bank([row({ date: '2026-03-05', amount: '-3.15' })]));
+  const cash = store.getAccounts().accounts.find(account => account.name === 'Everyday');
+  const detail = store.getEndpointActivity(cash.id);
+  assert.deepEqual(detail.summary.monthly.map(point => point.month), ['2026-01', '2026-02', '2026-03']);
+  assert.deepEqual(detail.summary.monthly[1], { month: '2026-02', incoming: 0, outgoing: 0, payments: 0 });
+  assert.equal(detail.summary.monthly.reduce((sum, point) => sum + point.incoming, 0), detail.summary.incoming);
+  assert.equal(detail.summary.monthly.reduce((sum, point) => sum + point.outgoing, 0), detail.summary.outgoing);
+  assert.equal(detail.summary.monthly.reduce((sum, point) => sum + point.payments, 0), detail.summary.payments);
+  assert.equal(detail.summary.monthly[0].payments, 5, 'paired transfer rows contribute one payment');
+  const payment = store.getTransactions().transactions.find(row => row.amount === -315);
+  store.updateAccountMembership({ transactionId: payment.id, side: 'to', endpointId: payment.toEndpointId, status: 'confirmed' });
+  const recipient = store.getEndpointActivity(payment.toEndpointId);
+  assert.deepEqual(recipient.summaries.confirmed.monthly, [{ month: '2026-03', incoming: 315, outgoing: 0, payments: 1 }]);
+  const category = recipient.categorySummaries.confirmed.find(item => item.category === 'Food');
+  assert.deepEqual(category.monthly, recipient.summaries.confirmed.monthly);
+  store.updateAccountMembership({ transactionId: payment.id, side: 'to', endpointId: payment.toEndpointId, status: 'dismissed' });
+  const dismissed = store.getEndpointActivity(payment.toEndpointId);
+  assert.equal(dismissed.summaries.confirmed.monthly.length, 0);
+  assert.deepEqual(dismissed.summaries.dismissed.monthly, [{ month: '2026-03', incoming: 315, outgoing: 0, payments: 1 }]);
 });

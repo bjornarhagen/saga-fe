@@ -1,0 +1,8 @@
+---
+import { CHART_SCALES } from '../../scripts/page-chart-scale.js';
+const { id } = Astro.props;
+---
+<div class="page-chart-scale">
+  <label for={id}>Chart scale<select id={id} data-page-chart-scale aria-describedby={`${id}-note`}><option value="default" data-default-chart-scale selected>Default: Square root</option>{CHART_SCALES.map(scale => <option value={scale.id}>{scale.label}</option>)}</select></label>
+  <p id={`${id}-note`} class="input-note page-scale-note" hidden></p>
+</div>
