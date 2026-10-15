@@ -14,7 +14,7 @@ const statuses = ['active', 'all', 'confirmed', 'suggested', 'dismissed'];
 const accepted = (status, filter) => filter === 'all' || (filter === 'active' ? status !== 'dismissed' : filter === 'confirmed' ? ['confirmed', 'owned'].includes(status) : status === filter);
 
 /** Projection only: source facts, owner decisions and financial rows stay distinct. */
-export function projectActivity({ transactions, overrides, accounts, accountIdentifiers, counterparties, counterpartyIdentifiers, lineage, endpointReferences = [], membershipDecisions = [], categoryDecisions = [] }) {
+export function projectActivity({ transactions, overrides, accounts, accountIdentifiers, counterparties, counterpartyIdentifiers, lineage, endpointReferences = [], membershipDecisions = [], categoryDecisions = [], ownershipLinks = [] }) {
   const nodes = new Map(), accountRefs = new Map(), partyRefs = new Map(), nodeParties = new Map(), endpointAliases = new Map();
   const parties = new Map(counterparties.map(party => [party.id, party]));
   const sourceKey = (sourceId, externalId) => JSON.stringify([sourceId, externalId]);
@@ -29,12 +29,22 @@ export function projectActivity({ transactions, overrides, accounts, accountIden
     if (node) addIdentifier(node, identifier.source_id, identifier.adapter, identifier.external_id);
   }
   for (const identifier of counterpartyIdentifiers) partyRefs.set(sourceKey(identifier.source_id, identifier.external_id), identifier.counterparty_id);
+  const ownerRefs = new Map();
+  for (const link of ownershipLinks) {
+    if (accountRefs.has(sourceKey(link.source_id, link.provider_identifier))) continue;
+    ownerRefs.set(sourceKey(link.source_id, link.provider_identifier), link);
+    endpointAliases.set(link.endpoint_id, link.account_id);
+    const node = nodes.get(link.account_id);
+    if (node) addIdentifier(node, link.source_id, link.adapter, link.provider_identifier);
+  }
   const latest = new Map(lineage.map(row => [row.transaction_id, row]));
   const external = (sourceId, adapter, identifier, name = '', counterpartyId = null, observation = {}) => {
     if (!identifier) return null;
     const knownAccount = accountRefs.get(sourceKey(sourceId, identifier));
     if (knownAccount) return nodes.get(knownAccount) || null;
     const id = `ep_${digest(JSON.stringify([sourceId, 'account', identifier])).slice(0, 32)}`;
+    const ownerLink = ownerRefs.get(sourceKey(sourceId, identifier));
+    if (ownerLink && nodes.has(ownerLink.account_id)) return { ...nodes.get(ownerLink.account_id), ownershipEndpointId: ownerLink.endpoint_id };
     const partyId = counterpartyId || partyRefs.get(sourceKey(sourceId, identifier)) || null;
     const evidence = classifyEndpointEvidence({ adapter, identifier, label: name, declaredAccount: adapter !== 'norwegian-bank-csv' });
     if (!nodes.has(id)) nodes.set(id, { id, name: evidence.displayName, owned: false, accountId: null, counterpartyId: partyId, counterpartyName: parties.get(partyId)?.name || null, kind: evidence.isAccountIdentifier ? 'external-account' : evidence.kind === 'merchant-hint' ? 'merchant-hint' : 'unknown-endpoint', labelSource: evidence.kind === 'merchant-hint' ? 'provider-text' : name ? 'source-label' : 'masked-identifier', evidence, identifiers: [], reference: { id, sourceId, providerIdentifier: identifier, counterpartyId: partyId, label: '' } });
@@ -87,7 +97,7 @@ export function projectActivity({ transactions, overrides, accounts, accountIden
     if (transaction.amount < 0) from ||= owned; else if (transaction.amount > 0) to ||= owned;
     if (transaction.amount < 0 && !to) to = partyEndpoint(transaction.counterpartyId);
     else if (transaction.amount > 0 && !from) from = partyEndpoint(transaction.counterpartyId);
-    return { ...transaction, categoryExampleKey: source ? JSON.stringify([source.source_id, source.fingerprint]) : transaction.id, sourceFromEndpointId: from?.id || null, sourceToEndpointId: to?.id || null, sourceId: source?.source_id || null, sourceAdapter: source?.adapter || null };
+    return { ...transaction, categoryExampleKey: source ? JSON.stringify([source.source_id, source.fingerprint]) : transaction.id, sourceFromOwnershipId: from?.ownershipEndpointId || null, sourceToOwnershipId: to?.ownershipEndpointId || null, sourceFromEndpointId: from?.id || null, sourceToEndpointId: to?.id || null, sourceId: source?.source_id || null, sourceAdapter: source?.adapter || null };
   });
   for (const [id, partyIds] of nodeParties) {
     const node = nodes.get(id); node.counterpartyId = partyIds.size === 1 ? [...partyIds][0] : null;
@@ -123,11 +133,11 @@ export function projectActivity({ transactions, overrides, accounts, accountIden
       const reviewRequired = confirmedConflict || !!(source?.owned && (sourceDecision || (linkedId && linkedId !== sourceId)));
       const storedDecision = savedConfirmed || sourceDecision;
       row[`${side}EndpointId`] = target?.id || null; row[`${side}Endpoint`] = publicEndpoint(target);
-      const membership = { status: source?.owned || ownedTarget ? 'owned' : confirmed ? 'confirmed' : sourceDecision?.status === 'dismissed' ? 'dismissed' : source ? 'suggested' : 'unknown', endpointId: target?.id || sourceId, sourceEndpointId: sourceId, provenance: ownedTarget ? 'owner-owned-account' : source?.owned ? 'source' : confirmed || sourceDecision ? 'owner' : source ? 'source' : 'none', explicit: !ownedTarget && !!storedDecision, decisionEndpointId: storedDecision?.decisionEndpointId || null, decisionStatus: storedDecision?.status || null, reviewRequired, isEffective: !!target };
+      const membership = { status: source?.owned || ownedTarget ? 'owned' : confirmed ? 'confirmed' : sourceDecision?.status === 'dismissed' ? 'dismissed' : source ? 'suggested' : 'unknown', endpointId: target?.id || sourceId, sourceEndpointId: sourceId, provenance: ownedTarget ? 'owner-owned-account' : source?.owned ? (row[`source${cap}OwnershipId`] ? 'owner-account-ownership' : 'source') : confirmed || sourceDecision ? 'owner' : source ? 'source' : 'none', explicit: !ownedTarget && !!storedDecision, decisionEndpointId: storedDecision?.decisionEndpointId || null, decisionStatus: storedDecision?.status || null, reviewRequired, isEffective: !!target };
       row[`${side}Membership`] = membership;
       if (source) {
         const sourceReviewDecision = sourceDecision || (source.owned && confirmedConflict ? savedConfirmed : null);
-        candidates.push({ side, endpointId: sourceId, sourceEndpointId: sourceId, status: source.owned ? 'owned' : ownedTarget ? 'dismissed' : sourceDecision?.status || (confirmed && confirmed.endpointId !== sourceId ? 'dismissed' : 'suggested'), provenance: ownedTarget ? 'owner-other-target' : source.owned ? 'source' : sourceDecision ? 'owner' : confirmed && confirmed.endpointId !== sourceId ? 'owner-other-target' : 'source', explicit: !!sourceReviewDecision, decisionEndpointId: sourceReviewDecision?.decisionEndpointId || null, decisionStatus: sourceReviewDecision?.status || null, reviewRequired: source.owned && reviewRequired, isEffective: target?.id === sourceId });
+        candidates.push({ side, endpointId: sourceId, sourceEndpointId: sourceId, status: source.owned ? 'owned' : ownedTarget ? 'dismissed' : sourceDecision?.status || (confirmed && confirmed.endpointId !== sourceId ? 'dismissed' : 'suggested'), provenance: ownedTarget ? 'owner-other-target' : source.owned ? (row[`source${cap}OwnershipId`] ? 'owner-account-ownership' : 'source') : sourceDecision ? 'owner' : confirmed && confirmed.endpointId !== sourceId ? 'owner-other-target' : 'source', explicit: !!sourceReviewDecision, decisionEndpointId: sourceReviewDecision?.decisionEndpointId || null, decisionStatus: sourceReviewDecision?.status || null, reviewRequired: source.owned && reviewRequired, isEffective: target?.id === sourceId });
       }
       if (ownedTarget) candidates.push({ side, endpointId: ownedTarget.id, sourceEndpointId: sourceId, status: 'owned', provenance: 'owner-owned-account', explicit: false, isEffective: true });
       for (const decision of decisions) if (decision.endpointId !== sourceId && nodes.has(decision.endpointId)) {
@@ -165,7 +175,7 @@ export function projectActivity({ transactions, overrides, accounts, accountIden
   }
   flows.sort((a, b) => b.date.localeCompare(a.date));
   const detailEndpoint = node => node ? { ...publicEndpoint(node), identifiers: node.identifiers } : null;
-  const clean = row => { const { sourceId, sourceAdapter, categoryExampleKey, ...value } = row; return value; };
+  const clean = row => { const { sourceId, sourceAdapter, sourceFromOwnershipId, sourceToOwnershipId, categoryExampleKey, ...value } = row; return value; };
   const candidatesFor = (flow, endpointIds) => flow.transactionIds.flatMap(id => candidatesByTransaction.get(id) || []).filter(candidate => endpointIds.has(candidate.endpointId));
   const summary = (selectedFlows, endpointIds, filter = 'active', includeMonthly = false) => {
     let incoming = 0n, outgoing = 0n, incomingPayments = 0, outgoingPayments = 0, largestPayment = 0; const ids = new Set(), selected = [];
