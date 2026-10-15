@@ -172,7 +172,11 @@ input:focus, select:focus { border-color: var(--accent); }
 .assumptions .text-button { display: block; margin-top: var(--s-2); }
 .forecast-results { display: flex; flex-direction: column; gap: var(--s-5); min-width: 0; }
 .forecast-horizon { min-width: 160px; font: 10px var(--font-mono); color: var(--fg-dim); }
-.forecast-time-controls { display: flex; flex-wrap: wrap; gap: var(--s-3); }
+.forecast-time-controls { display: flex; flex-wrap: wrap; align-items: end; gap: var(--s-3); }
+.forecast-method-trigger { display: flex; align-items: center; gap: var(--s-3); min-height: 44px; }
+#forecast-method-dialog { width: 660px; }
+#forecast-method-dialog .forecast-method { margin: 0; }
+#forecast-method-dialog .dialog-actions { justify-content: flex-end; }
 .forecast-methods { min-width: 0; border: 1px solid var(--border); padding: var(--s-4); margin: 0 0 var(--s-4); }
 .forecast-methods legend { font: 11px var(--font-mono); padding-inline: var(--s-2); color: var(--fg-1); }
 #forecast-method-options { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr)); gap: var(--s-3); }

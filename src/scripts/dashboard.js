@@ -280,6 +280,7 @@ function renderForecast() {
 }
 function renderForecastMethods(methods) {
   const container = $('forecast-method-options');
+  $('forecast-method-count').textContent = state.methods.length ? `${state.methods.length} selected` : 'Scenario only';
   // Keep the focused checkbox in place while chart and outcomes redraw.
   if (!container.children.length) container.innerHTML = methods.map(method => `<label class="forecast-method"><input type="checkbox" data-forecast-method="${method.id}" aria-describedby="method-${method.id}-note"><span><strong>${esc(method.name)}</strong><small id="method-${method.id}-note"></small></span></label>`).join('');
   for (const method of methods) {
@@ -431,6 +432,7 @@ $('overview-grouping').addEventListener('change', () => renderOverview());
 $('overview-scale').addEventListener('change', () => renderOverview());
 $('forecast-history').addEventListener('change', () => { state.historyMonths = Number($('forecast-history').value); renderForecast(); persist(); });
 $('forecast-horizon').addEventListener('change', () => { state.horizon = Number($('forecast-horizon').value); renderForecast(); persist(); });
+$('open-forecast-methods').addEventListener('click', () => $('forecast-method-dialog').showModal());
 $('forecast-method-options').addEventListener('change', event => {
   const method = event.target.dataset.forecastMethod;
   if (!method) return;
