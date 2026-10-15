@@ -119,6 +119,7 @@ function activateRoute(route, { scroll = true, focus = false, restore = false } 
   if (state.data && view === 'forecast') renderForecast();
   if (state.data && view === 'overview') renderOverview();
   if (state.data && view === 'transactions') renderTransactions();
+  if (state.data && view === 'accounts') accountController.redrawCharts();
   if (scroll) window.scrollTo({ top: restore ? routePositions.get(routeHash(route)) || 0 : 0, behavior: 'instant' });
   if (loaded) void explorer.openRoute(route, { focus }).then(() => {
     if (restore && ['account', 'transaction'].includes(view) && routeHash(currentRoute) === routeHash(route)) window.scrollTo({ top: routePositions.get(routeHash(route)) || 0, behavior: 'instant' });
@@ -547,7 +548,7 @@ if (!location.hash || location.hash !== routeHash(currentRoute)) history.replace
 activateRoute(currentRoute, { scroll: false });
 try { await loadLocal(); } catch (error) { handleError(error); }
 let resizeTimeout;
-window.addEventListener('resize', () => { clearTimeout(resizeTimeout); resizeTimeout = setTimeout(() => { if (!state.data) return; if (state.view === 'overview') renderOverview(); if (state.view === 'forecast') renderForecast(); if (state.view === 'transactions') renderTransactions(); if (state.view === 'account') explorer.redrawCharts(); }, 100); });
+window.addEventListener('resize', () => { clearTimeout(resizeTimeout); resizeTimeout = setTimeout(() => { if (!state.data) return; if (state.view === 'overview') renderOverview(); if (state.view === 'forecast') renderForecast(); if (state.view === 'transactions') renderTransactions(); if (state.view === 'accounts') accountController.redrawCharts(); if (state.view === 'account') explorer.redrawCharts(); }, 100); });
 $('sign-out')?.addEventListener('click', async () => {
   try { await api('/api/session', { method: 'DELETE', body: {} }); location.assign('/login'); }
   catch (error) { toast(error.message); }
@@ -560,5 +561,6 @@ window.addEventListener('saga:chartscaledefaultchange', () => {
   if (state.view === 'overview') renderOverview();
   if (state.view === 'forecast') renderForecast();
   if (state.view === 'transactions') renderTransactions();
+  if (state.view === 'accounts') accountController.redrawCharts();
   if (state.view === 'account') explorer.redrawCharts();
 });

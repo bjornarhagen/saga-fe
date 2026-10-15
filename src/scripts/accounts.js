@@ -1,6 +1,8 @@
 import { renderMetricCards } from './statistics.js';
 import { renderTimeSeriesChart } from './charts.js';
 import { accountTypes, accountRoles } from '../lib/account-values.js';
+import { summarizeAccounts } from '../lib/account-statistics.js';
+import { createAccountInsights } from './account-insights.js';
 
 const escape = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
 const integerAmount = value => value === '' ? null : Math.round(Number(value) * 100);
@@ -25,19 +27,15 @@ export function createAccountController({ api, money, today, onChange, onUse, on
   const $ = id => document.getElementById(id);
   const exact = new Intl.NumberFormat('nb-NO', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const valueText = amount => amount === null ? '—' : exact.format(amount / 100) + ' kr';
+  const insights = createAccountInsights({ money, valueText });
   function render() {
-    const groups = [
-      ['available', 'Available cash', a => a.role === 'available'],
-      ['reserve', 'Savings reserve', a => a.role === 'reserve'],
-      ['investment', 'Investment values', a => a.accountType === 'investment'],
-      ['excluded', 'Other excluded accounts', a => a.role === 'excluded' && a.accountType !== 'investment']
-    ];
-    renderMetricCards($('account-summary'), groups.map(([role, label, matches]) => {
-      const rows = accounts.filter(matches), known = rows.filter(a => a.balance !== null);
-      const total = Number(known.reduce((sum, a) => sum + BigInt(a.balance), 0n));
-      const missing = rows.length - known.length;
-      return { label, value: !Number.isSafeInteger(total) ? 'Total too large' : known.length || !rows.length ? money(total) : 'Not set', note: `${rows.length} accounts · latest recorded values${missing ? ` · ${missing} unknown` : ''}${role === 'investment' ? ' · outside cash forecast' : ''}`, icon: role === 'available' ? 'balance' : 'saving', tone: role === 'available' ? 'income' : 'neutral' };
-    }));
+    insights.setData(accounts);
+    renderMetricCards($('account-summary'), summarizeAccounts(accounts).groups.role.map(row => ({
+      label: row.label,
+      value: row.total === null ? row.knownCount ? 'Total too large' : row.count ? 'Not set' : money(0) : money(row.total),
+      note: `${row.count} account${row.count === 1 ? '' : 's'} · latest recorded values${row.unknownCount ? ` · ${row.unknownCount} unknown` : ''}${row.id === 'investment' ? ' · outside cash forecast' : ''}`,
+      icon: row.id === 'available' ? 'balance' : 'saving', tone: row.id === 'available' ? 'income' : 'neutral',
+    })));
     const start = accountStartingPoint(accounts);
     $('account-readiness').textContent = start.ready ? `Balances ready as of ${start.date}. Available cash and reserves do not overlap.` : start.reason;
     $('use-account-balances').disabled = !start.ready;
@@ -59,11 +57,18 @@ export function createAccountController({ api, money, today, onChange, onUse, on
   $('account-cards').addEventListener('change', event => {
     if (event.target.name === 'accountType') syncType(event.target, event.target.form.elements.role);
   });
+  function renderValueChart(element) {
+    const account = accounts.find(a => a.id === element.dataset.valueChart);
+    if (!account) return;
+    renderTimeSeriesChart(element, { points: account.valueHistory || [], series: [{ key: 'amount', name: 'Recorded value', color: 'var(--chart-4)' }], title: `Recorded value · ${account.name}`, format: valueText, label: point => point.date, timeSpacing: true, width: element.clientWidth, empty: 'No known values recorded.' });
+  }
+  function redrawOpenHistories() {
+    $('account-cards').querySelectorAll('.account-value-history[open] [data-value-chart]').forEach(renderValueChart);
+  }
+  $('accounts-scale').addEventListener('change', redrawOpenHistories);
   $('account-cards').addEventListener('toggle', event => {
     if (!event.target.matches('.account-value-history') || !event.target.open) return;
-    const element = event.target.querySelector('[data-value-chart]');
-    const account = accounts.find(a => a.id === element.dataset.valueChart);
-    renderTimeSeriesChart(element, { points: (account.valueHistory || []).filter(row => row.amount !== null), series: [{ key: 'amount', name: 'Recorded value', color: 'var(--chart-4)' }], title: `Recorded value · ${account.name}`, format: valueText, label: point => point.date, width: element.clientWidth, empty: 'No known values recorded.' });
+    renderValueChart(event.target.querySelector('[data-value-chart]'));
   }, true);
   $('account-cards').addEventListener('submit', async event => {
     event.preventDefault(); const form = event.target.closest('form[data-account-id]'); if (!form) return;
@@ -87,5 +92,5 @@ export function createAccountController({ api, money, today, onChange, onUse, on
     finally { button.disabled = false; }
   });
   $('use-account-balances').addEventListener('click', () => onUse());
-  return { setData(rows) { accounts = rows; render(); }, startingPoint() { return accountStartingPoint(accounts); } };
+  return { setData(rows) { accounts = rows; render(); }, startingPoint() { return accountStartingPoint(accounts); }, redrawCharts() { insights.redraw(); redrawOpenHistories(); } };
 }

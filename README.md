@@ -293,6 +293,18 @@ break the comparison. Charts connect known observations, not daily valuations.
 Latest-value subtotals can contain different dates; forecast starting balances
 still require aligned dates for included cash and reserve accounts.
 
+Accounts shows a combined **Total recorded value** across all tracked accounts,
+including investments and accounts outside the cash forecast. Negative balances
+reduce the total. Unknown values are omitted and the page shows how many accounts
+have a recorded value, along with the range of value dates. This is a total of
+the latest observations, not a live bank balance or a complete net-worth measure.
+The breakdown groups values by forecast use, account type, institution, or
+individual account. Positive and negative balances have separate bars, so they
+remain visible when they offset within a group. The account history selector
+compares dated observations without estimating missing balances or investment
+returns. Page scale choices also apply to open account history charts; expanded
+views keep their controls separate from the page.
+
 Reserve needs are cumulative at each checkpoint; do not sum them across months.
 The reserve is shown separately and is not automatically withdrawn or increased
 by planned savings. The scenario holds monthly assumptions constant; all methods omit

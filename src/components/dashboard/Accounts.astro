@@ -1,6 +1,34 @@
+---
+import ChartScale from './ChartScale.astro';
+---
 <section id="accounts-view" class="view" hidden>
-  <header class="page-heading"><div><p class="eyebrow">04 / ACCOUNTS & BALANCES</p><h1>Know where you stand.</h1><p class="subtitle">Track bank accounts and investments, including accounts without exports. Record values over time.</p></div><button id="add-account" class="outline-button">+ Add account</button></header>
+  <header class="page-heading account-page-heading"><div><p class="eyebrow">04 / ACCOUNTS & BALANCES</p><h1>Know where you stand.</h1><p class="subtitle">Your total, your account mix, and the values you have recorded over time.</p></div><div class="account-page-controls"><ChartScale id="accounts-scale" /><button id="add-account" class="outline-button">+ Add account</button></div></header>
+  <article class="card account-total-card" aria-labelledby="account-total-title">
+    <div class="account-total-main">
+      <p class="eyebrow">ACROSS YOUR ACCOUNTS</p>
+      <h2 id="account-total-title">Total recorded value</h2>
+      <p id="account-total" class="account-total-value">—</p>
+      <p id="account-total-note" class="account-total-note"></p>
+      <p id="account-total-dates" class="account-total-dates"></p>
+    </div>
+    <dl id="account-total-details" class="account-total-details"></dl>
+  </article>
   <div id="account-summary" class="metrics account-summary"></div>
+  <div class="account-insights-grid">
+    <article class="card account-insight-card" aria-labelledby="account-allocation-title">
+      <div class="card-heading"><div><p class="eyebrow">THE BREAKDOWN</p><h2 id="account-allocation-title">Where your money sits</h2></div></div>
+      <label class="account-chart-control" for="account-breakdown-group">Group accounts by<select id="account-breakdown-group" aria-controls="account-allocation" aria-describedby="account-allocation-note"><option value="role">Use in forecast</option><option value="type">Account type</option><option value="institution">Bank or platform</option><option value="account">Individual accounts</option></select></label>
+      <div id="account-allocation" class="account-allocation"></div>
+      <p id="account-allocation-note" class="chart-note"></p>
+    </article>
+    <article class="card account-insight-card" aria-labelledby="account-history-title">
+      <div class="card-heading"><div><p class="eyebrow">YOUR OBSERVATIONS</p><h2 id="account-history-title">Recorded value over time</h2></div></div>
+      <label class="account-chart-control" for="account-history-account">Account<select id="account-history-account" aria-controls="account-history-chart" aria-describedby="account-history-note"></select></label>
+      <dl id="account-history-change" class="account-history-change"></dl>
+      <div id="account-history-chart" class="chart account-history-chart"></div>
+      <p id="account-history-note" class="chart-note">Recorded observations only. Values between observations are not inferred from transactions.</p>
+    </article>
+  </div>
   <article class="review-banner"><div><strong id="account-readiness">Set your account balances to build a starting point.</strong><p>Imported transactions do not establish opening or current balances. Blank means unknown; zero is a real balance. Investment values stay separate from cash and reserves. Each observation keeps its own date.</p></div><button id="use-account-balances" class="outline-button">Use balances for forecast →</button></article>
   <div id="account-cards" class="accounts-grid"></div>
   <article class="card endpoint-directory" aria-labelledby="endpoint-directory-title">
