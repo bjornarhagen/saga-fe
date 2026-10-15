@@ -1,4 +1,4 @@
-# Use scripts/preview.sh so every checkout has its own project and loopback port.
+# Use scripts/preview.sh so every chat and checkout has its own project and port.
 # Preview data is disposable: it resets whenever the container is recreated.
 services:
   app:
@@ -13,6 +13,10 @@ services:
       ASTRO_TELEMETRY_DISABLED: "1"
       TRANSACTIONS_FILE: ""
       DATABASE_PATH: /var/lib/saga-fe/saga-fe.sqlite
+    labels:
+      dev.saga-fe.preview: "true"
+      dev.saga-fe.checkout: "${SAGA_FE_PREVIEW_CHECKOUT:?Use scripts/preview.sh}"
+      dev.saga-fe.session: "${SAGA_FE_PREVIEW_SESSION:?Use scripts/preview.sh}"
     volumes:
       - ./src:/app/src:ro
       - ./public:/app/public:ro
@@ -30,3 +34,10 @@ services:
       retries: 3
     init: true
     restart: "no"
+
+networks:
+  default:
+    labels:
+      dev.saga-fe.preview: "true"
+      dev.saga-fe.checkout: "${SAGA_FE_PREVIEW_CHECKOUT:?Use scripts/preview.sh}"
+      dev.saga-fe.session: "${SAGA_FE_PREVIEW_SESSION:?Use scripts/preview.sh}"

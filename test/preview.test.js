@@ -18,7 +18,7 @@ function previewFixture(t) {
   writeFileSync(join(bin, 'docker'), `#!${process.execPath}
 import { appendFileSync } from 'node:fs';
 const args = process.argv.slice(2);
-appendFileSync(process.env.PREVIEW_TEST_LOG, JSON.stringify({ args, port: process.env.SAGA_FE_PREVIEW_PORT }) + '\\n');
+appendFileSync(process.env.PREVIEW_TEST_LOG, JSON.stringify({ args, port: process.env.SAGA_FE_PREVIEW_PORT, checkout: process.env.SAGA_FE_PREVIEW_CHECKOUT, session: process.env.SAGA_FE_PREVIEW_SESSION }) + '\\n');
 if (args.includes('--help')) console.log(process.env.PREVIEW_TEST_RMI === 'no' ? 'down options' : '--rmi string');
 if (args.includes('port')) console.log('127.0.0.1:54321');
 `, { mode: 0o755 });
@@ -27,7 +27,7 @@ if (args.includes('port')) console.log('127.0.0.1:54321');
     run: (args = [], env = {}) => spawnSync('sh', [join(checkout, 'scripts/preview.sh'), ...args], {
       cwd: root,
       encoding: 'utf8',
-      env: { ...process.env, PATH: `${bin}${delimiter}${process.env.PATH}`, PREVIEW_TEST_LOG: log, SAGA_FE_PREVIEW_PORT: '', ...env },
+      env: { ...process.env, PATH: `${bin}${delimiter}${process.env.PATH}`, PREVIEW_TEST_LOG: log, SAGA_FE_PREVIEW_PORT: '', SAGA_FE_PREVIEW_SESSION: '', CODEX_THREAD_ID: '', ...env },
     }),
     calls: () => existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n').filter(Boolean).map(line => JSON.parse(line)) : [],
   };
@@ -37,19 +37,27 @@ function assertScoped(call, checkout) {
   assert.deepEqual(call.args.slice(0, 6), ['compose', '--project-directory', checkout, '-f', join(checkout, 'compose.preview.yaml'), '-p']);
   assert.match(call.args[6], /^saga-fe-preview-\d+$/);
   assert.notEqual(call.args[6], 'saga-fe');
+  assert.equal(call.checkout, checkout);
 }
 
-test('preview help and invalid inputs never call Docker or use the main port', t => {
+test('preview help and invalid inputs never call Docker', t => {
   const preview = previewFixture(t);
   assert.equal(preview.run().status, 0);
   for (const args of [['unknown'], ['up', 'extra'], ['down', '--volumes'], ['status', 'extra'], ['exec']]) {
     assert.equal(preview.run(args).status, 2);
   }
-  for (const port of ['5187', '0005187', '0', '000', '-1', '65536', '9999999999999999999999', '5190:4321', '$(touch bad)', ' 5190']) {
+  for (const port of ['0', '000', '-1', '65536', '9999999999999999999999', '5190:4321', '$(touch bad)', ' 5190']) {
     const result = preview.run(['up'], { SAGA_FE_PREVIEW_PORT: port });
     assert.equal(result.status, 2, `Rejected port ${port}: ${result.stderr}`);
   }
   assert.deepEqual(preview.calls(), []);
+});
+
+test('preview accepts port 5187 as an ordinary requested port', t => {
+  const preview = previewFixture(t);
+  const result = preview.run(['up'], { SAGA_FE_PREVIEW_PORT: '0005187' });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(preview.calls()[0].port, '5187');
 });
 
 test('preview projects stay separate across checkout paths and stable across commands', t => {
@@ -69,6 +77,22 @@ test('preview projects stay separate across checkout paths and stable across com
   }
   assert.equal(first.calls()[0].args[6], first.calls()[2].args[6]);
   assert.notEqual(first.calls()[0].args[6], second.calls()[0].args[6]);
+});
+
+test('chats sharing a checkout have separate previews and an explicit session can recover one', t => {
+  const preview = previewFixture(t);
+  assert.equal(preview.run(['up'], { CODEX_THREAD_ID: 'chat-a' }).status, 0);
+  assert.equal(preview.run(['up'], { CODEX_THREAD_ID: 'chat-b' }).status, 0);
+  assert.equal(preview.run(['down'], { CODEX_THREAD_ID: 'chat-b', SAGA_FE_PREVIEW_SESSION: 'chat-a' }).status, 0);
+  assert.equal(preview.run(['status']).status, 0);
+  const calls = preview.calls();
+  for (const call of calls) assertScoped(call, preview.checkout);
+  assert.notEqual(calls[0].args[6], calls[2].args[6]);
+  assert.equal(calls[0].session, 'chat-a');
+  assert.equal(calls[2].session, 'chat-b');
+  assert.equal(calls[4].session, 'chat-a');
+  assert.equal(calls[0].args[6], calls[5].args[6]);
+  assert.equal(calls.at(-1).session, 'manual');
 });
 
 test('preview teardown only targets its own project and never removes volumes', t => {
