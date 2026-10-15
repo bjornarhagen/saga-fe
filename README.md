@@ -79,13 +79,72 @@ the import UI for subsequent exports.
 To run tests without a bank export or an existing application container:
 
 ```sh
-docker build --target development -t saga-fe:development .
-docker run --rm saga-fe:development npm test
+saga_check_image=$(docker build --quiet --target development .)
+docker run --rm "$saga_check_image" npm test
+docker run --rm "$saga_check_image" npm run build
 ```
+
+These source checks use disposable containers and do not start a web service or
+mount a ledger. Running the built image by ID avoids tag conflicts between
+parallel builds. Dependencies stay inside the image.
 
 The production image uses Astro's standalone Node adapter and Node 24. Both
 runtime targets run as an unprivileged user. Private exports and databases are
 excluded from source control and image build contexts.
+
+## Parallel previews and housekeeping
+
+Keep the application on port 5187 and its ledger volume available. Its source
+can be mounted from another checkout; inspect the existing container's Compose
+labels and mounts before changing it. The primary checkout is not necessarily
+the source of the running application.
+
+For parallel work, use a disposable preview from the worktree being edited:
+
+```sh
+scripts/preview.sh up
+scripts/preview.sh exec npm test
+scripts/preview.sh exec npm run build
+scripts/preview.sh status
+scripts/preview.sh down
+```
+
+The helper assigns a stable Compose project to each checkout and prints its
+random loopback address after startup. To choose a port, use
+`SAGA_FE_PREVIEW_PORT=5190 scripts/preview.sh up`. Port 5187 is reserved for the
+main application. Calling the helper without arguments shows help and changes
+nothing. Do not run plain `docker compose up` from parallel worktrees: the base
+file uses the fixed `saga-fe` project name and can replace the main service.
+
+Preview source files are mounted read-only for live updates. The preview starts
+with an empty ledger in memory, with no bank CSV or persistent volume mounted.
+Use invented data only. **Preview data resets when the container is recreated**;
+it can also disappear when the container stops. Use the main application for
+the private ledger.
+
+Run `scripts/preview.sh down` as soon as a preview is no longer needed, including
+while waiting for review. Always tear it down after tests pass, changes are
+pushed, and the PR is merged. This removes only that checkout's preview
+containers and network, plus its local image when Compose supports it. Other
+projects and ledger volumes stay in place. For source tests alone, use the
+`docker run --rm` commands above.
+
+For completed worktrees:
+
+1. Verify that work is pushed and its PR is merged. Check the PR directly;
+   squash merges can leave the branch outside main's Git ancestry.
+2. Check that no active chat or running container still uses the worktree.
+3. Remove its disposable `node_modules/`, `.astro/`, and `dist/` directories
+   promptly. They can be rebuilt in Docker.
+4. Retain the clean checkout for seven days after merge or last use, whichever
+   is later. Then archive it through its owning chat with Codex's managed-worktree
+   tool, which keeps a recoverable Git snapshot. Do not delete active or dirty
+   worktrees directly.
+
+Before archival, preserve any ignored private files separately. The recovery
+snapshot excludes ignored files such as imports, databases, and credentials.
+Keep ledger volumes and backups unless their deletion is explicitly authorized.
+Use targeted cleanup; do not run global Docker pruning commands.
 
 ## Dashboard and appearance
 

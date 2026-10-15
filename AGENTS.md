@@ -17,6 +17,32 @@ docker compose exec -T app npm run build
 Use `docker compose logs app` for runtime diagnostics. Default local URL:
 `http://127.0.0.1:5187`. Do not stop or change other projects' containers.
 
+## Parallel work and cleanup
+
+- Protect the application on port 5187 and its ledger volume. Its running source
+  can belong to another checkout; inspect Compose labels and mounts before
+  changing existing resources. Do not assume the primary checkout owns it.
+- Use `scripts/preview.sh up` for parallel work, then `scripts/preview.sh exec
+  npm test` or `scripts/preview.sh exec npm run build`. The helper gives each
+  checkout a separate Compose project and random loopback port. An optional
+  `SAGA_FE_PREVIEW_PORT` cannot use 5187. Do not use plain `docker compose up`
+  from a worktree: the base file's fixed project name can replace the main app.
+- Previews use an empty, temporary ledger and no private CSV or persistent
+  volume. Use invented data only. Data resets when the container is recreated.
+- Run `scripts/preview.sh down` as soon as the preview is no longer needed, and
+  always after the work is tested, pushed, and merged. It removes only that
+  checkout's preview containers, network, and local image. For source checks
+  alone, prefer the Docker `--rm` workflow in README.md.
+- Remove disposable `node_modules/`, `.astro/`, and `dist/` promptly from
+  completed, inactive worktrees. Keep clean completed worktrees for seven days
+  after merge or last use, whichever is later, then archive them through the
+  owning chat and Codex's managed-worktree tool. Check pushed/merged status
+  directly; squash merges can make Git ancestry checks insufficient.
+- Do not delete active or dirty worktrees. Preserve ignored private files before
+  archival: Codex's Git recovery snapshot does not include them. Keep ledger
+  volumes and backups unless their deletion is explicitly authorized. Do not
+  use global Docker container, network, volume, image, or builder pruning.
+
 ## Data and behavior
 
 - Keep `transactions.csv` and `.budget-data/` out of Git and Docker images.
