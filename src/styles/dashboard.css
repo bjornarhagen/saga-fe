@@ -237,6 +237,32 @@ dialog::backdrop { background: color-mix(in srgb, var(--bg) 80%, transparent); }
 .icon-button { background: transparent; border: 0; font-size: 25px; color: var(--fg-dim); padding: var(--s-1) var(--s-2); }
 dialog label { margin-block: var(--s-5); }
 .dialog-actions { display: flex; justify-content: space-between; gap: var(--s-4); align-items: center; margin-top: var(--s-5); }
+.category-shortcuts, .category-suggestion-actions, .similar-select-actions { display: flex; flex-wrap: wrap; gap: var(--s-3); }
+.category-shortcuts { margin-bottom: var(--s-4); }
+.category-suggestion { margin-top: var(--s-2); }
+.category-suggestion > small { color: var(--fg-muted); }
+.category-suggestion.auto_applied > small, .category-suggestion.not_applied > small { color: var(--link); }
+.category-suggestion-actions { margin-top: var(--s-2); }
+.category-suggestion-actions .text-button { font-size: 12px; }
+.category-assistance:empty { display: none; }
+#similar-category-dialog { width: 850px; max-height: calc(100dvh - 32px); overflow: auto; }
+.similar-amount-filters { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--s-4); }
+.similar-amount-filters input { width: 100%; }
+.similar-amount-filters label { margin-block: var(--s-3); }
+#similar-category-dialog > .checkbox { margin-block: var(--s-3); }
+.similar-payment-list { max-height: 32dvh; overflow: auto; margin-top: var(--s-4); }
+.similar-payment-list thead { position: sticky; top: 0; background: var(--bg-1); }
+.similar-payment-list input[type="checkbox"] { width: 18px; height: 18px; accent-color: var(--accent); }
+.similar-mobile-category { display: none; }
+@media (max-width: 500px) {
+  .similar-amount-filters { grid-template-columns: 1fr; gap: 0; }
+  #similar-category-dialog .dialog-actions { flex-wrap: wrap; }
+  .similar-payment-list table { table-layout: fixed; }
+  .similar-payment-list th:first-child, .similar-payment-list td:first-child { width: 28px; padding-inline: 0; }
+  .similar-payment-list th:nth-child(3), .similar-payment-list td:nth-child(3) { display: none; }
+  .similar-payment-list th:last-child, .similar-payment-list td:last-child { width: 90px; }
+  .similar-mobile-category { display: block; }
+}
 .toast { position: fixed; bottom: var(--s-5); left: var(--s-4); right: var(--s-4); z-index: 20; max-width: 500px; background: var(--bg-2); border: 1px solid var(--accent-dim); color: var(--fg-1); padding: var(--s-4) var(--s-5); font-family: var(--font-mono); font-size: 11px; line-height: 1.8; }
 .loading { padding: var(--s-7) 0; font-family: var(--font-mono); font-size: 12px; color: var(--fg-dim); }
 .loading > span { color: var(--accent); margin-right: var(--s-3); }

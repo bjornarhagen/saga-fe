@@ -5,6 +5,8 @@ import { dirname } from 'node:path';
 import { adapt, adapters, digest } from './adapters.js';
 import * as v from './validation.js';
 import { projectActivity } from './activity.js';
+import { applyOverrides } from '../lib/engine.js';
+import { similarCategoryTransactions } from '../lib/categorization.js';
 
 const schema = `
 CREATE TABLE IF NOT EXISTS accounts (id TEXT PRIMARY KEY, name TEXT NOT NULL, currency TEXT NOT NULL DEFAULT 'NOK', role TEXT NOT NULL DEFAULT 'available' CHECK(role IN ('available','reserve','excluded')), name_override INTEGER NOT NULL DEFAULT 0, role_override INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL);
@@ -54,15 +56,23 @@ CREATE TABLE transaction_account_memberships (
   PRIMARY KEY(transaction_id,side,endpoint_id)
 );
 CREATE UNIQUE INDEX one_confirmed_account_per_side ON transaction_account_memberships(transaction_id,side) WHERE status='confirmed';`;
-export const DATABASE_SCHEMA_VERSION = 3;
-const migrations = [null, schema, relationSchema, membershipSchema];
+const categorySchema = `CREATE TABLE transaction_category_decisions (
+  transaction_id TEXT NOT NULL REFERENCES transactions(id),
+  category TEXT NOT NULL,
+  status TEXT NOT NULL CHECK(status IN ('user_applied','user_rejected')),
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY(transaction_id,category)
+);
+CREATE UNIQUE INDEX one_applied_category ON transaction_category_decisions(transaction_id) WHERE status='user_applied';`;
+export const DATABASE_SCHEMA_VERSION = 4;
+const migrations = [null, schema, relationSchema, membershipSchema, categorySchema];
 const now = () => new Date().toISOString();
 const own = (object, key) => Object.prototype.hasOwnProperty.call(object, key);
 export const LEDGER_TABLES = Object.freeze([
   'accounts', 'categories', 'counterparties', 'ingest_sources',
   'account_identifiers', 'category_identifiers', 'counterparty_identifiers',
   'balance_snapshots', 'transactions', 'source_transaction_keys',
-  'ingest_batches', 'ingest_rows', 'transaction_edits', 'settings', 'transaction_relations', 'external_endpoint_refs', 'transaction_account_memberships'
+  'ingest_batches', 'ingest_rows', 'transaction_edits', 'settings', 'transaction_relations', 'external_endpoint_refs', 'transaction_account_memberships', 'transaction_category_decisions'
 ]);
 
 export function createStore(path = ':memory:') {
@@ -119,6 +129,7 @@ export function createStore(path = ':memory:') {
     return { accounts, totals };
   };
   const getOverrides = () => Object.fromEntries(all('SELECT transaction_id,value_json FROM transaction_edits ORDER BY transaction_id').map(row => [row.transaction_id, JSON.parse(row.value_json)]));
+  const categoryDecisionRows = () => all('SELECT transaction_id AS transactionId,category,status,updated_at AS updatedAt FROM transaction_category_decisions ORDER BY transaction_id,category');
   const membershipRows = () => all('SELECT transaction_id AS transactionId,side,endpoint_id AS endpointId,status,created_at AS createdAt,updated_at AS updatedAt FROM transaction_account_memberships ORDER BY transaction_id,side,endpoint_id');
   const relationRows = () => all('SELECT transaction_a AS transactionId,transaction_b AS relatedTransactionId,status,created_at AS createdAt,updated_at AS updatedAt FROM transaction_relations ORDER BY transaction_a,transaction_b');
   const updateRelation = input => {
@@ -149,10 +160,12 @@ export function createStore(path = ':memory:') {
       return [checkedId, checkedValue];
     });
   };
-  const saveOverrides = overrides => {
+  const saveOverrides = (overrides, { resetCategories = false } = {}) => {
     return atomic(() => {
+      v.boolean(resetCategories, 'Reset category decisions');
       const entries = checkOverrideMap(overrides);
       run('DELETE FROM transaction_edits');
+      if (resetCategories) run('DELETE FROM transaction_category_decisions');
       for (const [id, value] of entries) run('INSERT INTO transaction_edits(transaction_id,value_json,updated_at) VALUES(?,?,?)', id, JSON.stringify(value), now());
       return getOverrides();
     });
@@ -171,6 +184,7 @@ export function createStore(path = ':memory:') {
   const transactionRows = () => all(`SELECT t.*, c.name AS category,s.name AS subcategory,f.name AS fromAccount,a.name AS account,ta.name AS toAccount,cp.name AS counterparty FROM transactions t LEFT JOIN categories c ON c.id=t.category_id LEFT JOIN categories s ON s.id=t.subcategory_id LEFT JOIN accounts f ON f.id=t.from_account_id LEFT JOIN accounts ta ON ta.id=t.to_account_id LEFT JOIN accounts a ON a.id=t.account_id LEFT JOIN counterparties cp ON cp.id=t.counterparty_id ORDER BY t.date DESC,t.rowid`).map(row => ({ id: row.id, date: row.date, month: row.date.slice(0, 7), amount: row.amount, currency: row.currency, description: row.description, category: row.category || (row.amount > 0 ? 'Other money in' : 'Uncategorized'), subcategory: row.subcategory || '', type: row.bank_type, kind: row.kind, regularIncome: !!row.regular_income, review: !!row.needs_review, microSaving: !!row.micro_saving, fromAccount: row.fromAccount || '', toAccount: row.toAccount || '', account: row.account || '', accountId: row.account_id, fromAccountId: row.from_account_id, toAccountId: row.to_account_id, counterpartyId: row.counterparty_id, counterparty: row.counterparty || '' }));
   const activityProjection = (transactions = transactionRows(), overrides = getOverrides()) => projectActivity({
     transactions, overrides, accounts: accountRows(), membershipDecisions: membershipRows(),
+    categoryDecisions: categoryDecisionRows(),
     endpointReferences: all('SELECT r.*,s.adapter FROM external_endpoint_refs r LEFT JOIN ingest_sources s ON s.id=r.source_id'),
     accountIdentifiers: all('SELECT i.*,s.adapter FROM account_identifiers i JOIN ingest_sources s ON s.id=i.source_id'),
     counterparties: all('SELECT id,name FROM counterparties'),
@@ -318,6 +332,49 @@ export function createStore(path = ':memory:') {
     }),
     getCounterpartyActivity: id => readSnapshot(() => { v.string(id, 'Counterparty ID', 200); return activityProjection().counterpartyActivity(id); }),
     getSettings, saveSettings, getOverrides, saveOverrides,
+    updateCategories: input => atomic(() => {
+      v.object(input, 'Category decision');
+      for (const key of Object.keys(input)) if (!['transactionIds', 'category', 'status', 'similarTo', 'minAmount', 'maxAmount', 'includeCategorized'].includes(key)) throw new v.ValidationError('Unknown category decision field.');
+      const ids = v.list(input.transactionIds, 'Transactions', 10000).map(id => v.string(id, 'Transaction ID', 200));
+      if (!ids.length || new Set(ids).size !== ids.length) throw new v.ValidationError('Select one or more distinct transactions.');
+      if (input.status !== null && !['user_applied', 'user_rejected'].includes(input.status)) throw new v.ValidationError('Choose apply, reject, or reset for the category.');
+      const category = input.status === null ? null : v.string(input.category, 'Category', 200);
+      const minAmount = input.minAmount === undefined ? 0 : v.amount(input.minAmount), maxAmount = input.maxAmount === undefined ? Number.MAX_SAFE_INTEGER : v.amount(input.maxAmount);
+      if (minAmount < 0 || maxAmount < minAmount) throw new v.ValidationError('Use a valid nonnegative amount range.');
+      const includeCategorized = input.includeCategorized === undefined ? false : v.boolean(input.includeCategorized, 'Include categorized payments');
+      const edits = getOverrides();
+      const rows = applyOverrides(activityProjection(undefined, edits).rows, edits), byId = new Map(rows.map(row => [row.id, row]));
+      if (ids.some(id => !byId.has(id))) throw new v.ValidationError('Every selected transaction must exist in the ledger.');
+      if (input.similarTo !== undefined) {
+        const anchor = byId.get(v.string(input.similarTo, 'Similar transaction ID', 200));
+        if (!anchor) throw new v.ValidationError('The original transaction must exist in the ledger.');
+        const matches = new Set(similarCategoryTransactions(anchor, rows, { status: input.status, category, minAmount, maxAmount, includeCategorized }).map(row => row.id));
+        if (ids.some(id => !matches.has(id))) throw new v.ValidationError('The matching payments changed. Refresh the list before applying.');
+      }
+      for (const id of ids) {
+        if (input.status === null) {
+          run('DELETE FROM transaction_category_decisions WHERE transaction_id=?', id);
+          const edit = edits[id];
+          if (edit?.category) {
+            delete edit.category;
+            run('UPDATE transaction_edits SET value_json=?,updated_at=? WHERE transaction_id=?', JSON.stringify(edit), now(), id);
+          }
+        }
+        else {
+          if (input.status === 'user_rejected' && (byId.get(id).categorySuggestion?.category !== category || byId.get(id).categorySuggestion?.status === 'user_applied')) throw new v.ValidationError('This category suggestion changed. Review it again before rejecting.');
+          if (input.status === 'user_applied') {
+            run("DELETE FROM transaction_category_decisions WHERE transaction_id=? AND status='user_applied'", id);
+            const edit = edits[id];
+            if (edit?.category) {
+              delete edit.category;
+              run('UPDATE transaction_edits SET value_json=?,updated_at=? WHERE transaction_id=?', JSON.stringify(edit), now(), id);
+            }
+          }
+          run('INSERT INTO transaction_category_decisions(transaction_id,category,status,updated_at) VALUES(?,?,?,?) ON CONFLICT(transaction_id,category) DO UPDATE SET status=excluded.status,updated_at=excluded.updated_at', id, category, input.status, now());
+        }
+      }
+      return { updated: ids.length };
+    }),
     exportLedger: () => {
       // A WAL reader sees one committed database state across every table,
       // including writes made by a different application connection.
@@ -361,7 +418,10 @@ export function createStore(path = ':memory:') {
     },
     updateOverride: input => atomic(() => {
       v.object(input); const id = v.string(input.id, 'Transaction ID', 200);
-      if (input.override === null) run('DELETE FROM transaction_edits WHERE transaction_id=?', id);
+      if (input.override === null) {
+        run('DELETE FROM transaction_edits WHERE transaction_id=?', id);
+        run('DELETE FROM transaction_category_decisions WHERE transaction_id=?', id);
+      }
       else {
         const value = v.override(input.override || Object.fromEntries(Object.entries(input).filter(([key]) => key !== 'id')));
         const transaction = query('SELECT amount FROM transactions WHERE id=?', id);
