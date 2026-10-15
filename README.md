@@ -290,6 +290,7 @@ with recorded net movements after the previous date through the current date.
 “Other change” is the residual: it may include gains/losses, fees, interest or
 missing transactions, and is not a calculated investment return. Unknown values
 break the comparison. Charts connect known observations, not daily valuations.
+
 Accounts shows a combined **Total recorded value** across all tracked accounts,
 including investments and accounts outside the cash forecast. Negative balances
 reduce the total. Unknown values are omitted and the page shows how many accounts
@@ -317,8 +318,8 @@ filter the displayed total and lines without changing account roles.
 Monthly contributions use linked historical destinations by default; the
 reserve/investment split can be set explicitly. Contributions with no tracked
 destination leave the tracked total rather than inventing assets. Transfers
-and reserve withdrawals do not create wealth. Optional savings and investment growth use explicit annual scenario assumptions,
-compounded monthly on opening values; both default to zero. Contributions arrive
+and reserve withdrawals do not create wealth. Optional savings and investment
+growth use explicit annual scenario assumptions, compounded monthly on opening values; both default to zero. Contributions arrive
 after each month's growth. Cash-flow-adjusted history is an optional alternative:
 it uses Modified Dietz to remove dated capital contributions and withdrawals,
 including transfers across the selected group boundary. Same-group transfers
@@ -353,9 +354,9 @@ horizon; checkpoint rows retain each month's actual planned amount.
 
 In the cash method comparison, reserve needs are cumulative at each checkpoint;
 do not sum them across months. Those lines show cash before reserve support.
-Use Cash & reserves for the allocation and withdrawal simulation. The scenario
-holds monthly assumptions constant; cash methods omit paydays, bill dates,
-interest, taxes, investment returns, and daily liquidity.
+Use Cash & reserves for the allocation and withdrawal simulation. With income
+trend off, the scenario holds its income input constant. Cash methods omit
+paydays, bill dates, interest, taxes, investment returns, and daily liquidity.
 Review large historical payments before relying on an average.
 
 **Forecast horizon** selects 1–60 future months. **History shown** independently
