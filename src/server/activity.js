@@ -2,6 +2,7 @@ import { digest } from './adapters.js';
 import { applyOverrides, shiftMonth } from '../lib/engine.js';
 import { classifyEndpointEvidence } from '../lib/evidence.js';
 import { ValidationError } from './validation.js';
+import { projectCategories } from '../lib/categorization.js';
 
 const exactNumber = value => {
   if (value > BigInt(Number.MAX_SAFE_INTEGER) || value < BigInt(Number.MIN_SAFE_INTEGER)) throw new ValidationError('Activity totals exceed the supported exact amount range.');
@@ -13,7 +14,7 @@ const statuses = ['active', 'all', 'confirmed', 'suggested', 'dismissed'];
 const accepted = (status, filter) => filter === 'all' || (filter === 'active' ? status !== 'dismissed' : filter === 'confirmed' ? ['confirmed', 'owned'].includes(status) : status === filter);
 
 /** Projection only: source facts, owner decisions and financial rows stay distinct. */
-export function projectActivity({ transactions, overrides, accounts, accountIdentifiers, counterparties, counterpartyIdentifiers, lineage, endpointReferences = [], membershipDecisions = [] }) {
+export function projectActivity({ transactions, overrides, accounts, accountIdentifiers, counterparties, counterpartyIdentifiers, lineage, endpointReferences = [], membershipDecisions = [], categoryDecisions = [] }) {
   const nodes = new Map(), accountRefs = new Map(), partyRefs = new Map(), nodeParties = new Map(), endpointAliases = new Map();
   const parties = new Map(counterparties.map(party => [party.id, party]));
   const sourceKey = (sourceId, externalId) => JSON.stringify([sourceId, externalId]);
@@ -64,7 +65,7 @@ export function projectActivity({ transactions, overrides, accounts, accountIden
     if (reference.kind === 'counterparty') partyEndpoint(reference.counterparty_id);
     else external(reference.source_id, reference.adapter, reference.provider_identifier, reference.label, reference.counterparty_id);
   }
-  const rows = transactions.map(transaction => {
+  let rows = transactions.map(transaction => {
     const source = latest.get(transaction.id); let raw = {};
     if (source) { try { raw = JSON.parse(source.raw_json); } catch { /* Missing facts remain unknown. */ } }
     let from = nodes.get(transaction.fromAccountId) || null, to = nodes.get(transaction.toAccountId) || null;
@@ -86,7 +87,7 @@ export function projectActivity({ transactions, overrides, accounts, accountIden
     if (transaction.amount < 0) from ||= owned; else if (transaction.amount > 0) to ||= owned;
     if (transaction.amount < 0 && !to) to = partyEndpoint(transaction.counterpartyId);
     else if (transaction.amount > 0 && !from) from = partyEndpoint(transaction.counterpartyId);
-    return { ...transaction, sourceFromEndpointId: from?.id || null, sourceToEndpointId: to?.id || null, sourceId: source?.source_id || null, sourceAdapter: source?.adapter || null };
+    return { ...transaction, categoryExampleKey: source ? JSON.stringify([source.source_id, source.fingerprint]) : transaction.id, sourceFromEndpointId: from?.id || null, sourceToEndpointId: to?.id || null, sourceId: source?.source_id || null, sourceAdapter: source?.adapter || null };
   });
   for (const [id, partyIds] of nodeParties) {
     const node = nodes.get(id); node.counterpartyId = partyIds.size === 1 ? [...partyIds][0] : null;
@@ -131,6 +132,7 @@ export function projectActivity({ transactions, overrides, accounts, accountIden
     if (!row.sourceFromEndpointId && !row.sourceToEndpointId && row.accountId && nodes.has(row.accountId)) candidates.push({ side: 'unknown', endpointId: row.accountId, sourceEndpointId: null, status: 'owned', provenance: 'source', explicit: false, isEffective: true });
     candidatesByTransaction.set(row.id, candidates);
   }
+  rows = projectCategories(rows, overrides, categoryDecisions);
   const effective = applyOverrides(rows, overrides), effectiveById = new Map(effective.map(row => [row.id, row])), rowById = new Map(rows.map(row => [row.id, row]));
   const flowByTransaction = new Map(), flows = [], mirrored = new Map();
   const makeFlow = members => {
@@ -148,7 +150,7 @@ export function projectActivity({ transactions, overrides, accounts, accountIden
   for (const group of mirrored.values()) for (let i = 0; i < Math.max(group.outgoing.length, group.incoming.length); i++) makeFlow([group.outgoing[i], group.incoming[i]].filter(Boolean));
   flows.sort((a, b) => b.date.localeCompare(a.date));
   const detailEndpoint = node => node ? { ...publicEndpoint(node), identifiers: node.identifiers } : null;
-  const clean = row => { const { sourceId, sourceAdapter, ...value } = row; return value; };
+  const clean = row => { const { sourceId, sourceAdapter, categoryExampleKey, ...value } = row; return value; };
   const candidatesFor = (flow, endpointIds) => flow.transactionIds.flatMap(id => candidatesByTransaction.get(id) || []).filter(candidate => endpointIds.has(candidate.endpointId));
   const summary = (selectedFlows, endpointIds, filter = 'active', includeMonthly = false) => {
     let incoming = 0n, outgoing = 0n, incomingPayments = 0, outgoingPayments = 0, largestPayment = 0; const ids = new Set(), selected = [];

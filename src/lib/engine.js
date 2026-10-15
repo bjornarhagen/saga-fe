@@ -66,7 +66,10 @@ export function parseExport(text) {
 export function applyOverrides(transactions, overrides = {}) {
   return transactions.map(t => {
     const o = overrides[t.id] || {};
-    return { ...t, ...o, review: t.review && !o.kind, regularIncome: (o.kind ? o.kind === 'income' && t.regularIncome : t.regularIncome) };
+    const suggestion = t.categorySuggestion;
+    const applied = suggestion && ['auto_applied', 'user_applied'].includes(suggestion.status);
+    const category = o.category || (applied ? suggestion.category : t.category);
+    return { ...t, ...(applied ? { category } : {}), ...o, subcategory: category !== t.category ? '' : t.subcategory, review: suggestion?.status === 'auto_applied' || (t.review && !o.kind && suggestion?.status !== 'user_applied'), regularIncome: (o.kind ? o.kind === 'income' && t.regularIncome : t.regularIncome) };
   });
 }
 export function summarize(transactions) {

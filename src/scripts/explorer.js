@@ -1,3 +1,4 @@
+import { categoryControls } from './categorization.js';
 import { applyRelationshipDecisions } from '../lib/relationships.js';
 import { routeHash } from './routes.js';
 import { createMembershipController } from './memberships.js';
@@ -73,6 +74,9 @@ export function createExplorer({ api, exactMoney, dateText, getTransactions, edi
     }).join('') : '<tr><td colspan="4" class="no-results">No connections match this view and status filter.</td></tr>';
   }
   function renderTransaction() {
+    const categoryPanel = $('transaction-category-assistance');
+    categoryPanel.innerHTML = transactionDetail ? categoryControls(transactionDetail.transaction, true) : '';
+    categoryPanel.hidden = !categoryPanel.innerHTML;
     const { transaction: row, original, override = {}, from, to, provenance = [] } = transactionDetail;
     const sourceFields = transactionDetail.sourceFields || {};
     $('transaction-detail-title').textContent = row.description || 'Transaction details.';
