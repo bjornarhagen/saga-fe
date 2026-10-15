@@ -5,6 +5,7 @@ import { dirname } from 'node:path';
 import { adapt, adapters, digest } from './adapters.js';
 import * as v from './validation.js';
 import { projectActivity } from './activity.js';
+import { valueHistory } from '../lib/account-values.js';
 
 const schema = `
 CREATE TABLE IF NOT EXISTS accounts (id TEXT PRIMARY KEY, name TEXT NOT NULL, currency TEXT NOT NULL DEFAULT 'NOK', role TEXT NOT NULL DEFAULT 'available' CHECK(role IN ('available','reserve','excluded')), name_override INTEGER NOT NULL DEFAULT 0, role_override INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL);
@@ -54,15 +55,24 @@ CREATE TABLE transaction_account_memberships (
   PRIMARY KEY(transaction_id,side,endpoint_id)
 );
 CREATE UNIQUE INDEX one_confirmed_account_per_side ON transaction_account_memberships(transaction_id,side) WHERE status='confirmed';`;
-export const DATABASE_SCHEMA_VERSION = 3;
-const migrations = [null, schema, relationSchema, membershipSchema];
+const profileSchema = `
+CREATE TABLE account_profiles (
+  account_id TEXT PRIMARY KEY REFERENCES accounts(id),
+  account_type TEXT NOT NULL DEFAULT 'other' CHECK(account_type IN ('checking','savings','investment','credit','other')),
+  institution TEXT NOT NULL DEFAULT '',
+  type_override INTEGER NOT NULL DEFAULT 0,
+  institution_override INTEGER NOT NULL DEFAULT 0
+);
+INSERT INTO account_profiles(account_id) SELECT id FROM accounts;`;
+export const DATABASE_SCHEMA_VERSION = 4;
+const migrations = [null, schema, relationSchema, membershipSchema, profileSchema];
 const now = () => new Date().toISOString();
 const own = (object, key) => Object.prototype.hasOwnProperty.call(object, key);
 export const LEDGER_TABLES = Object.freeze([
   'accounts', 'categories', 'counterparties', 'ingest_sources',
   'account_identifiers', 'category_identifiers', 'counterparty_identifiers',
   'balance_snapshots', 'transactions', 'source_transaction_keys',
-  'ingest_batches', 'ingest_rows', 'transaction_edits', 'settings', 'transaction_relations', 'external_endpoint_refs', 'transaction_account_memberships'
+  'ingest_batches', 'ingest_rows', 'transaction_edits', 'settings', 'transaction_relations', 'external_endpoint_refs', 'transaction_account_memberships', 'account_profiles'
 ]);
 
 export function createStore(path = ':memory:') {
@@ -99,7 +109,8 @@ export function createStore(path = ':memory:') {
     const checked = balance === null ? null : v.amount(balance);
     run(`INSERT INTO balance_snapshots(id,account_id,as_of,amount,origin,created_at) VALUES(?,?,?,?,?,?) ON CONFLICT(account_id,as_of) DO UPDATE SET amount=excluded.amount, origin=excluded.origin,created_at=excluded.created_at WHERE excluded.origin='manual' OR balance_snapshots.origin!='manual'`, randomUUID(), accountId, v.date(asOf), checked, origin, now());
   };
-  const accountRows = () => all(`SELECT a.id,a.name,a.currency,a.role,b.amount AS balance,b.as_of AS balanceDate FROM accounts a LEFT JOIN balance_snapshots b ON b.id=(SELECT id FROM balance_snapshots WHERE account_id=a.id ORDER BY as_of DESC,created_at DESC LIMIT 1) ORDER BY a.created_at,a.id`).map(account => ({ ...account, balance: account.balance ?? null, balanceDate: account.balanceDate ?? null }));
+  const accountRows = () => all(`SELECT a.id,a.name,a.currency,a.role,p.account_type AS accountType,p.institution,b.amount AS balance,b.as_of AS balanceDate,EXISTS(SELECT 1 FROM account_identifiers WHERE account_id=a.id) AS imported FROM accounts a JOIN account_profiles p ON p.account_id=a.id LEFT JOIN balance_snapshots b ON b.id=(SELECT id FROM balance_snapshots WHERE account_id=a.id ORDER BY as_of DESC,created_at DESC LIMIT 1) ORDER BY a.created_at,a.id`).map(account => ({ ...account, imported: !!account.imported, balance: account.balance ?? null, balanceDate: account.balanceDate ?? null }));
+  const snapshots = id => all('SELECT as_of AS date,amount FROM balance_snapshots WHERE account_id=? ORDER BY as_of', id);
   const accountPayload = () => {
     const accounts = accountRows();
     const totals = { available: 0, reserve: 0, excluded: 0, hasBalances: false, missingBalances: 0, missingAvailable: 0, missingReserve: 0, balanceDates: [], availableDates: [], reserveDates: [] };
@@ -139,13 +150,24 @@ export function createStore(path = ':memory:') {
     });
   };
   const getSettings = () => { const row = query("SELECT value_json FROM settings WHERE key='forecast'"); return row ? { balanceSource: 'manual', ...JSON.parse(row.value_json) } : null; };
+  const checkOwnedAccounts = (id, value) => {
+    const transaction = query('SELECT amount FROM transactions WHERE id=?', id);
+    if (transaction && value.kind) v.kindForAmount(value.kind, transaction.amount);
+    const detail = transaction && (value.fromOwnedAccountId || value.toOwnedAccountId) ? activityProjection().transactionDetail(id) : null;
+    for (const side of ['from', 'to']) if (value[`${side}OwnedAccountId`]) {
+      const accountId = value[`${side}OwnedAccountId`];
+      if (!transaction) throw new v.ValidationError('Link an owned account only to an existing transaction.');
+      if (!query('SELECT id FROM accounts WHERE id=?', accountId)) throw new v.ValidationError('The owned account does not exist.');
+      const source = detail[side === 'from' ? 'sourceFrom' : 'sourceTo'];
+      if (source?.owned && source.accountId !== accountId) throw new v.ValidationError('An imported owned-account side cannot be assigned to a different account.');
+    }
+  };
   const checkOverrideMap = overrides => {
     v.object(overrides, 'Transaction edits');
     if (Object.keys(overrides).length > 100000) throw new v.ValidationError('Too many transaction edits.');
     return Object.entries(overrides).map(([id, value]) => {
       const checkedId = v.string(id, 'Transaction ID', 200), checkedValue = v.override(value);
-      const transaction = query('SELECT amount FROM transactions WHERE id=?', checkedId);
-      if (transaction && checkedValue.kind) v.kindForAmount(checkedValue.kind, transaction.amount);
+      checkOwnedAccounts(checkedId, checkedValue);
       return [checkedId, checkedValue];
     });
   };
@@ -211,11 +233,15 @@ export function createStore(path = ':memory:') {
       return { decisions: membershipRows() };
     });
   };
+  const accountValues = (accounts, projection = activityProjection()) => accounts.map(account => ({ ...account,
+    valueHistory: valueHistory(snapshots(account.id), projection.endpointActivity(account.id)?.flows || [], account.id)
+  }));
   const getTransactions = () => readSnapshot(() => {
-    const transactions = activityProjection().rows;
+    const projection = activityProjection();
+    const transactions = projection.rows;
     const detail = accountPayload();
     const duplicateRows = query('SELECT COALESCE(SUM(CASE WHEN occurrence>0 THEN 1 ELSE 0 END),0) AS count FROM source_transaction_keys').count;
-    return { transactions, accounts: detail.accounts.map(account => account.name), accountDetails: detail.accounts, accountTotals: detail.totals, overrides: getOverrides(), settings: getSettings(), metadata: { rows: transactions.length, duplicateRows, zeroRows: transactions.filter(tx => tx.amount === 0).length, firstDate: transactions.at(-1)?.date || null, lastDate: transactions[0]?.date || null, currency: 'NOK', hasBalances: detail.totals.hasBalances, sources: query('SELECT COUNT(*) AS count FROM ingest_sources').count, batches: query('SELECT COUNT(*) AS count FROM ingest_batches').count } };
+    return { transactions, accounts: detail.accounts.map(account => account.name), accountDetails: accountValues(detail.accounts, projection), accountTotals: detail.totals, overrides: getOverrides(), settings: getSettings(), metadata: { rows: transactions.length, duplicateRows, zeroRows: transactions.filter(tx => tx.amount === 0).length, firstDate: transactions.at(-1)?.date || null, lastDate: transactions[0]?.date || null, currency: 'NOK', hasBalances: detail.totals.hasBalances, sources: query('SELECT COUNT(*) AS count FROM ingest_sources').count, batches: query('SELECT COUNT(*) AS count FROM ingest_batches').count } };
   });
   const ingest = input => {
     const adapted = adapt(input);
@@ -237,14 +263,23 @@ export function createStore(path = ':memory:') {
         }
         if (!found) {
           found = { id: randomUUID() };
-          if (type === 'account') run('INSERT INTO accounts(id,name,currency,role,created_at) VALUES(?,?,?,?,?)', found.id, v.string(item.name, 'Account name'), v.currency(item.currency), item.role || 'available', now());
+          if (type === 'account') {
+            run('INSERT INTO accounts(id,name,currency,role,created_at) VALUES(?,?,?,?,?)', found.id, v.string(item.name, 'Account name'), v.currency(item.currency), item.role || (item.accountType === 'investment' ? 'excluded' : 'available'), now());
+            run('INSERT INTO account_profiles(account_id) VALUES(?)', found.id);
+          }
           else run(`INSERT INTO ${table}(id,name) VALUES(?,?)`, found.id, v.string(item.name, `${type} name`));
           run(`INSERT INTO ${identifiers}(source_id,external_id,${column}) VALUES(?,?,?)`, source.id, item.externalId, found.id);
         } else if (type === 'account') {
           run('UPDATE accounts SET name=CASE WHEN name_override=0 THEN ? ELSE name END WHERE id=?', v.string(item.name, 'Account name'), found.id);
           if (item.role) run('UPDATE accounts SET role=CASE WHEN role_override=0 THEN ? ELSE role END WHERE id=?', v.role(item.role), found.id);
         } else run(`UPDATE ${table} SET name=? WHERE id=?`, v.string(item.name, `${type} name`), found.id);
-        if (type === 'account' && own(item, 'balance')) insertBalance(found.id, item.balance, item.balanceDate, source.id);
+        if (type === 'account') {
+          if (own(item, 'accountType')) run('UPDATE account_profiles SET account_type=CASE WHEN type_override=0 THEN ? ELSE account_type END WHERE account_id=?', item.accountType, found.id);
+          if (own(item, 'institution')) run('UPDATE account_profiles SET institution=CASE WHEN institution_override=0 THEN ? ELSE institution END WHERE account_id=?', item.institution, found.id);
+          const profile = query('SELECT p.account_type,a.role FROM accounts a JOIN account_profiles p ON p.account_id=a.id WHERE a.id=?', found.id);
+          v.accountProfile(profile.account_type, profile.role);
+          if (own(item, 'balance')) insertBalance(found.id, item.balance, item.balanceDate, source.id);
+        }
         return found.id;
       };
       for (const account of adapted.accounts) entity('account', account);
@@ -296,7 +331,7 @@ export function createStore(path = ':memory:') {
     });
   };
   return {
-    ingest, getTransactions, getAccounts: accountPayload,
+    ingest, getTransactions, getAccounts: () => readSnapshot(() => { const result = accountPayload(); return { ...result, accounts: accountValues(result.accounts) }; }),
     getRelations: () => ({ decisions: relationRows() }), updateRelation,
     getAccountMemberships: () => ({ decisions: membershipRows() }), updateAccountMembership,
     getEndpoints: () => readSnapshot(() => activityProjection().directory()),
@@ -304,7 +339,7 @@ export function createStore(path = ':memory:') {
       v.string(id, 'Endpoint ID', 200); const result = activityProjection().endpointActivity(id);
       if (result?.endpoint.accountId) {
         const account = accountRows().find(row => row.id === result.endpoint.accountId);
-        Object.assign(result.endpoint, { role: account.role, balance: account.balance, balanceDate: account.balanceDate, balanceHistory: all('SELECT as_of AS date,amount FROM balance_snapshots WHERE account_id=? ORDER BY as_of DESC,created_at DESC', account.id) });
+        Object.assign(result.endpoint, { role: account.role, accountType: account.accountType, institution: account.institution, balance: account.balance, balanceDate: account.balanceDate, balanceHistory: snapshots(account.id).reverse(), valueHistory: valueHistory(snapshots(account.id), result.flows, account.id) });
       }
       return result;
     }),
@@ -335,26 +370,35 @@ export function createStore(path = ':memory:') {
     getHistory: () => ({ adapters, batches: all('SELECT b.id,s.adapter,b.imported_at AS importedAt,b.filename,b.row_count AS rows,b.inserted_count AS inserted,b.existing_count AS existing,b.metadata_count AS metadata FROM ingest_batches b JOIN ingest_sources s ON s.id=b.source_id ORDER BY b.imported_at DESC,b.rowid DESC LIMIT 100') }),
     createAccount: input => {
       v.object(input, 'Account');
-      for (const key of Object.keys(input)) if (!['name', 'currency', 'role', 'balance', 'balanceDate'].includes(key)) throw new v.ValidationError('Unknown account field.');
-      const name = v.string(input.name, 'Account name'), currency = v.currency(input.currency), accountRole = v.role(input.role || 'available');
+      for (const key of Object.keys(input)) if (!['name', 'currency', 'role', 'balance', 'balanceDate', 'accountType', 'institution'].includes(key)) throw new v.ValidationError('Unknown account field.');
+      const name = v.string(input.name, 'Account name'), currency = v.currency(input.currency), accountType = v.accountType(input.accountType || 'other'), accountRole = v.role(input.role || (accountType === 'investment' ? 'excluded' : 'available'));
+      const institution = v.string(input.institution ?? '', 'Institution', 200, true);
+      v.accountProfile(accountType, accountRole);
       if (own(input, 'balance') && input.balance !== null) v.amount(input.balance);
       const balanceDate = v.date(input.balanceDate || v.today());
       return atomic(() => {
         const id = randomUUID(); run('INSERT INTO accounts(id,name,currency,role,name_override,role_override,created_at) VALUES(?,?,?,?,1,1,?)', id, name, currency, accountRole, now());
+        run('INSERT INTO account_profiles(account_id,account_type,institution,type_override,institution_override) VALUES(?,?,?,1,1)', id, accountType, institution);
         if (own(input, 'balance')) insertBalance(id, input.balance, balanceDate);
         const result = accountPayload(); return { account: result.accounts.find(account => account.id === id), ...result };
       });
     },
     updateAccount: input => {
       v.object(input, 'Account'); const id = v.string(input.id, 'Account ID', 200);
-      for (const key of Object.keys(input)) if (!['id', 'name', 'role', 'balance', 'balanceDate'].includes(key)) throw new v.ValidationError('Unknown account field.');
+      for (const key of Object.keys(input)) if (!['id', 'name', 'role', 'balance', 'balanceDate', 'accountType', 'institution'].includes(key)) throw new v.ValidationError('Unknown account field.');
       if (own(input, 'name')) v.string(input.name, 'Account name'); if (own(input, 'role')) v.role(input.role);
+      if (own(input, 'accountType')) v.accountType(input.accountType);
+      if (own(input, 'institution')) v.string(input.institution, 'Institution', 200, true);
       if (own(input, 'balance') && input.balance !== null) v.amount(input.balance);
       if (own(input, 'balanceDate')) v.date(input.balanceDate);
       return atomic(() => {
-        if (!query('SELECT id FROM accounts WHERE id=?', id)) throw new v.ValidationError('The account does not exist.');
+        const current = query('SELECT a.role,p.account_type FROM accounts a JOIN account_profiles p ON p.account_id=a.id WHERE a.id=?', id);
+        if (!current) throw new v.ValidationError('The account does not exist.');
+        v.accountProfile(input.accountType || current.account_type, input.role || current.role);
         if (own(input, 'name')) run('UPDATE accounts SET name=?,name_override=1 WHERE id=?', input.name.trim(), id);
         if (own(input, 'role')) run('UPDATE accounts SET role=?,role_override=1 WHERE id=?', input.role, id);
+        if (own(input, 'accountType')) run('UPDATE account_profiles SET account_type=?,type_override=1 WHERE account_id=?', input.accountType, id);
+        if (own(input, 'institution')) run('UPDATE account_profiles SET institution=?,institution_override=1 WHERE account_id=?', input.institution.trim(), id);
         if (own(input, 'balance')) insertBalance(id, input.balance, input.balanceDate || v.today());
         const result = accountPayload(); return { account: result.accounts.find(account => account.id === id), ...result };
       });
@@ -364,8 +408,7 @@ export function createStore(path = ':memory:') {
       if (input.override === null) run('DELETE FROM transaction_edits WHERE transaction_id=?', id);
       else {
         const value = v.override(input.override || Object.fromEntries(Object.entries(input).filter(([key]) => key !== 'id')));
-        const transaction = query('SELECT amount FROM transactions WHERE id=?', id);
-        if (transaction && value.kind) v.kindForAmount(value.kind, transaction.amount);
+        checkOwnedAccounts(id, value);
         run('INSERT INTO transaction_edits(transaction_id,value_json,updated_at) VALUES(?,?,?) ON CONFLICT(transaction_id) DO UPDATE SET value_json=excluded.value_json,updated_at=excluded.updated_at', id, JSON.stringify(value), now());
       }
       return getOverrides();

@@ -54,6 +54,8 @@ function canonical(data) {
     v.object(item); const result = { externalId: v.string(item.externalId, 'Account external ID', 300), name: v.string(item.name, 'Account name'), currency: v.currency(item.currency) };
     if (item.id) result.id = v.string(item.id, 'Account ID', 200);
     if ('role' in item) result.role = v.role(item.role);
+    if ('accountType' in item) result.accountType = v.accountType(item.accountType);
+    if ('institution' in item) result.institution = v.string(item.institution, 'Institution', 200, true);
     if ('balance' in item) { result.balance = item.balance === null ? null : v.amount(item.balance); result.balanceDate = v.date(item.balanceDate, 'Balance date'); }
     return result;
   });

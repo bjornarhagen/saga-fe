@@ -66,7 +66,17 @@ export function parseExport(text) {
 export function applyOverrides(transactions, overrides = {}) {
   return transactions.map(t => {
     const o = overrides[t.id] || {};
-    return { ...t, ...o, review: t.review && !o.kind, regularIncome: (o.kind ? o.kind === 'income' && t.regularIncome : t.regularIncome) };
+    const from = t.fromEndpoint, to = t.toEndpoint;
+    const ownedMovement = from?.owned && to?.owned;
+    let movementKind;
+    if (ownedMovement) {
+      // The cash boundary is separate from ownership. Investments are never cash.
+      const available = node => node.role === 'available' && node.accountType !== 'investment';
+      movementKind = available(from) === available(to) ? 'transfer' : t.amount < 0 && available(from) ? 'saving' : t.amount > 0 && available(to) ? 'income' : 'transfer';
+    }
+    const kind = o.kind || movementKind || t.kind;
+    return { ...t, ...o, kind, ownedMovement: !!ownedMovement, review: t.review && !o.kind && !ownedMovement,
+      regularIncome: !ownedMovement && kind === 'income' && t.regularIncome };
   });
 }
 export function summarize(transactions) {

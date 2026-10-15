@@ -98,8 +98,8 @@ test('decisions persist after source corrections, reimports, reopening and full 
   assert.equal(store.getTransactionDetail(a.id).sourceTo.id, b.toEndpointId);
   assert.equal(store.getEndpointActivity(a.toEndpointId).summaries.confirmed.payments, 1);
   const decisions = store.getAccountMemberships(), archive = store.exportLedger();
-  assert.equal(archive.databaseSchemaVersion, 3);
-  assert.equal(Object.keys(archive.tables).length, 17);
+  assert.equal(archive.databaseSchemaVersion, 4);
+  assert.equal(Object.keys(archive.tables).length, 18);
   assert.equal(archive.tables.external_endpoint_refs.length, 1);
   await store.backup(snapshot); store.close(); store = createStore(path); t.after(() => store.close());
   assert.deepEqual(store.getAccountMemberships(), decisions);
@@ -114,7 +114,7 @@ test('version-two migration preserves existing pair decisions and creates no inf
   store.updateRelation({ transactionId: a.id, relatedTransactionId: b.id, status: 'confirmed' });
   const pairs = store.getRelations(), original = store.exportLedger().tables;
   delete original.external_endpoint_refs; delete original.transaction_account_memberships; store.close();
-  const legacy = new DatabaseSync(path); legacy.exec('DROP TABLE transaction_account_memberships; DROP TABLE external_endpoint_refs; PRAGMA user_version=2'); legacy.close();
+  const legacy = new DatabaseSync(path); legacy.exec('DROP TABLE account_profiles; DROP TABLE transaction_account_memberships; DROP TABLE external_endpoint_refs; PRAGMA user_version=2'); legacy.close();
   store = createStore(path); t.after(() => store.close());
   assert.deepEqual(store.getRelations(), pairs);
   assert.deepEqual(store.getAccountMemberships(), { decisions: [] });
@@ -166,12 +166,12 @@ test('a reserved endpoint-reference table collision leaves version two and all p
   store.updateRelation({ transactionId: a.id, relatedTransactionId: b.id, status: 'confirmed' });
   const original = store.exportLedger().tables; delete original.external_endpoint_refs; delete original.transaction_account_memberships; store.close();
   const legacy = new DatabaseSync(path);
-  legacy.exec("DROP TABLE transaction_account_memberships; DROP TABLE external_endpoint_refs; CREATE TABLE external_endpoint_refs(unexpected TEXT); INSERT INTO external_endpoint_refs VALUES('synthetic-preserved'); PRAGMA user_version=2"); legacy.close();
+  legacy.exec("DROP TABLE account_profiles; DROP TABLE transaction_account_memberships; DROP TABLE external_endpoint_refs; CREATE TABLE external_endpoint_refs(unexpected TEXT); INSERT INTO external_endpoint_refs VALUES('synthetic-preserved'); PRAGMA user_version=2"); legacy.close();
   assert.throws(() => createStore(path), /already exists/);
   const check = new DatabaseSync(path, { readOnly: true }); t.after(() => check.close());
   assert.equal(check.prepare('PRAGMA user_version').get().user_version, 2);
   assert.equal(check.prepare('SELECT unexpected FROM external_endpoint_refs').get().unexpected, 'synthetic-preserved');
-  for (const table of Object.keys(original)) assert.deepEqual(check.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all(), original[table]);
+  for (const table of Object.keys(original).filter(table => table !== 'account_profiles')) assert.deepEqual(check.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all(), original[table]);
 });
 
 test('unknown source placeholders cannot be confirmed but can be dismissed and reset without financial changes', t => {

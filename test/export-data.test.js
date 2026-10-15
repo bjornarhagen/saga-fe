@@ -29,7 +29,7 @@ test('complete JSON archive covers every schema table and preserves all saved le
   const archive = JSON.parse(JSON.stringify(store.exportLedger()));
   assert.equal(archive.format, 'saga-fe-ledger');
   assert.equal(archive.formatVersion, 1);
-  assert.equal(archive.databaseSchemaVersion, 3);
+  assert.equal(archive.databaseSchemaVersion, 4);
   assert.equal(archive.amountUnit, 'ore');
   assert.equal(archive.currency, 'NOK');
   assert.ok(Number.isFinite(Date.parse(archive.exportedAt)));

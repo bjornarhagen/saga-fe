@@ -42,7 +42,7 @@ strings, so parse those fields separately when using the archive in another tool
 
 | Tables | Saved data |
 | --- | --- |
-| `accounts`, `balance_snapshots` | Names, roles, owner overrides and every recorded balance date, including unknown balances. |
+| `accounts`, `account_profiles`, `balance_snapshots` | Names, types, institutions, roles, owner overrides and every recorded value date, including unknown balances. |
 | `categories`, `counterparties` | Category hierarchy and sender/receiver names. |
 | `account_identifiers`, `category_identifiers`, `counterparty_identifiers` | Provider identifiers and links to ledger entities. |
 | `transactions`, `transaction_edits` | Source transactions and separate owner corrections. |
@@ -100,3 +100,7 @@ backups remain subject to the private deployment runbook.
 Both endpoints use the existing owner authentication boundary and attachment,
 `no-store` and `nosniff` response headers. They expose no environment values,
 authentication configuration, session data or server filesystem paths.
+
+Schema version 4 also preserves account type/institution profiles. Per-payment
+owned-account links live in `transaction_edits`; dated valuations remain in
+`balance_snapshots`. Both are included in JSON and SQLite archives.

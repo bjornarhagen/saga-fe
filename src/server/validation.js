@@ -20,6 +20,13 @@ export function role(value) {
   if (!['available', 'reserve', 'excluded'].includes(value)) throw new ValidationError('Account role must be available, reserve, or excluded.');
   return value;
 }
+export function accountType(value) {
+  if (!['checking', 'savings', 'investment', 'credit', 'other'].includes(value)) throw new ValidationError('Account type is invalid.');
+  return value;
+}
+export function accountProfile(type, accountRole) {
+  if (type === 'investment' && accountRole !== 'excluded') throw new ValidationError('Investment values must stay outside available cash and savings reserves.');
+}
 export function currency(value = 'NOK') {
   if (value !== 'NOK') throw new ValidationError('Only NOK is supported for calculations.');
   return value;
@@ -77,9 +84,10 @@ export function settings(value) {
 }
 export function override(value) {
   object(value, 'Transaction edit'); const result = {};
-  for (const key of Object.keys(value)) if (!['kind', 'category', 'excludeForecast'].includes(key)) throw new ValidationError('Unknown transaction edit field.');
+  for (const key of Object.keys(value)) if (!['kind', 'category', 'excludeForecast', 'fromOwnedAccountId', 'toOwnedAccountId'].includes(key)) throw new ValidationError('Unknown transaction edit field.');
   if ('kind' in value) result.kind = kind(value.kind);
   if ('category' in value) result.category = string(value.category, 'Category', 200);
   if ('excludeForecast' in value) result.excludeForecast = boolean(value.excludeForecast, 'Exclude from forecast');
+  for (const key of ['fromOwnedAccountId', 'toOwnedAccountId']) if (key in value) result[key] = string(value[key], 'Owned account ID', 200);
   return result;
 }
