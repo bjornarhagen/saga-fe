@@ -50,12 +50,21 @@ export function kindForAmount(value, transactionAmount) {
 }
 export function settings(value) {
   object(value, 'Settings'); const result = {};
-  for (const key of Object.keys(value)) if (!['fields', 'horizon', 'lookback', 'assumptions', 'scenario', 'balanceSource'].includes(key)) throw new ValidationError('Unknown forecast setting.');
+  for (const key of Object.keys(value)) if (!['fields', 'horizon', 'historyMonths', 'methods', 'lookback', 'assumptions', 'scenario', 'balanceSource'].includes(key)) throw new ValidationError('Unknown forecast setting.');
+  if ('historyMonths' in value) {
+    if (![0, 1, 3, 6, 12, 24].includes(value.historyMonths)) throw new ValidationError('Unknown chart history window.');
+    result.historyMonths = value.historyMonths;
+  }
+  if ('methods' in value) {
+    const supported = ['unchanged', 'average', 'recent', 'smoothed', 'seasonal'];
+    if (!Array.isArray(value.methods) || value.methods.length > supported.length || value.methods.some(id => !supported.includes(id)) || new Set(value.methods).size !== value.methods.length) throw new ValidationError('Unknown or repeated forecast comparison method.');
+    result.methods = [...value.methods];
+  }
   if ('balanceSource' in value) {
     if (!['manual', 'accounts'].includes(value.balanceSource)) throw new ValidationError('Balance source must be manual or accounts.');
     result.balanceSource = value.balanceSource;
   }
-  for (const [key, max] of [['horizon', 24], ['lookback', 60]]) if (key in value) {
+  for (const [key, max] of [['horizon', 60], ['lookback', 60]]) if (key in value) {
     if (!Number.isInteger(value[key]) || value[key] < 1 || value[key] > max) throw new ValidationError(`${key} is outside the supported range.`);
     result[key] = value[key];
   }

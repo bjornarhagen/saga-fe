@@ -112,20 +112,26 @@ export function monthlySeries(transactions, start, end) {
   for (let month = start; month <= end; month = shiftMonth(month, 1)) result.push({ month, ...summarize(transactions.filter(t => t.month === month)) });
   return result;
 }
-export function baseline(transactions, asOf, months = 3, firstDate = transactions.at(-1)?.date) {
+export function forecastHistory(transactions, asOf, months = 3, firstDate = transactions.at(-1)?.date) {
   const end = shiftMonth(asOf.slice(0, 7), -1);
   const start = shiftMonth(end, 1 - months);
+  if (!firstDate) return { start, end, series: [] };
   // Never treat a partial first export month as a complete month.
   const firstComplete = firstDate?.slice(8) === '01' ? firstDate.slice(0, 7) : shiftMonth(firstDate?.slice(0, 7) || start, 1);
   const actualStart = start > firstComplete ? start : firstComplete;
   const series = actualStart <= end ? monthlySeries(transactions.filter(t => !t.excludeForecast), actualStart, end) : [];
-  const divisor = series.length;
   const eligible = transactions.filter(t => !t.excludeForecast && t.month >= actualStart && t.month <= end);
-  const salary = eligible.filter(t => t.regularIncome && t.kind === 'income').reduce((sum, t) => sum + t.amount, 0);
-  return { start: actualStart, end, months: divisor, income: divisor ? Math.round(salary / divisor) : 0, expense: divisor ? Math.round(series.reduce((s, m) => s + m.expense, 0) / divisor) : 0, saving: divisor ? Math.round(series.reduce((s, m) => s + m.saving, 0) / divisor) : 0 };
+  return { start: actualStart, end, series: series.map(point => ({ month: point.month, expense: point.expense, saving: point.saving,
+    income: eligible.filter(t => t.month === point.month && t.regularIncome && t.kind === 'income').reduce((sum, t) => sum + t.amount, 0) })) };
 }
-export function project({ cash, savings = 0, income, expense, saving = 0, adjustment = 0, oneOff = 0, horizon = 3, asOf, buffer = 0 }) {
+export function baseline(transactions, asOf, months = 3, firstDate = transactions.at(-1)?.date) {
+  const { start, end, series } = forecastHistory(transactions, asOf, months, firstDate);
+  return { start, end, months: series.length, ...Object.fromEntries(['income', 'expense', 'saving'].map(key => [key, series.length ? Math.round(series.reduce((sum, point) => sum + point[key], 0) / series.length) : 0])) };
+}
+export function project({ cash, savings = 0, income, expense, saving = 0, adjustment = 0, oneOff = 0, horizon = 3, asOf, buffer = 0, monthlyFlows }) {
   if (cash === null || !Number.isFinite(cash)) return null;
+  if (!Number.isInteger(horizon) || horizon < 1 || horizon > 60) throw new RangeError('Forecast horizon must be 1–60 months.');
+  if (monthlyFlows && monthlyFlows.length !== horizon) throw new RangeError('Each projected month needs a cash flow.');
   let balance = cash; const monthlyNet = income - expense - saving - adjustment;
   const start = new Date(asOf + 'T12:00:00Z');
   const dates = [];
@@ -133,9 +139,12 @@ export function project({ cash, savings = 0, income, expense, saving = 0, adjust
     const targetMonth = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth() + i, 1));
     const lastDay = new Date(Date.UTC(targetMonth.getUTCFullYear(), targetMonth.getUTCMonth() + 1, 0)).getUTCDate();
     targetMonth.setUTCDate(Math.min(start.getUTCDate(), lastDay));
-    balance += monthlyNet - (i === 1 ? oneOff : 0);
+    const flow = monthlyFlows?.[i - 1];
+    const net = flow ? flow.income - flow.expense - flow.saving - adjustment : monthlyNet;
+    const cashChange = net - (i === 1 ? oneOff : 0);
+    balance += cashChange;
     const needed = Math.max(0, buffer - balance);
-    dates.push({ date: targetMonth.toISOString().slice(0, 10), balance, reserveNeeded: needed, savingsAfter: Math.max(0, savings - needed), uncovered: Math.max(0, needed - savings) });
+    dates.push({ date: targetMonth.toISOString().slice(0, 10), balance, cashChange, reserveNeeded: needed, savingsAfter: Math.max(0, savings - needed), uncovered: Math.max(0, needed - savings) });
   }
   const end = dates.at(-1);
   const reserveNeeded = Math.max(...dates.map(point => point.reserveNeeded));

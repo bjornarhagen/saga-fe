@@ -4,6 +4,7 @@ import { createAccountController } from './accounts.js';
 import { createExplorer } from './explorer.js';
 import { parseRoute, routeHash, parentView } from './routes.js';
 import { applyOverrides, summarize, baseline, project, shiftMonth } from '../lib/engine.js';
+import { methodForecasts, historicalCash, defaultForecastMethods } from '../lib/forecast.js';
 import { periodStatistics, comparePeriods, ratio, activitySeries, automaticGrouping } from '../lib/statistics.js';
 import { renderStatistics, renderMetricCards, percentage, changeText } from './statistics.js';
 import { renderTimeSeriesChart } from './charts.js';
@@ -24,7 +25,7 @@ const palette = Array.from({ length: 8 }, (_, i) => `var(--chart-${i + 1})`);
 const storageKey = 'saga-fe-local-v1';
 let saved = {};
 try { saved = JSON.parse(localStorage.getItem(storageKey) || localStorage.getItem('tally-local-v1') || '{}'); } catch { /* A fresh session works without storage. */ }
-const state = { data: null, transactions: [], view: 'overview', page: 0, horizon: saved.horizon || 3, lookback: saved.lookback || 3, overrides: saved.overrides || {}, assumptions: saved.assumptions || {}, editId: null, imported: false, scenario: saved.scenario || 'same', balanceSource: saved.balanceSource || 'manual' };
+const state = { data: null, transactions: [], view: 'overview', page: 0, horizon: saved.horizon || 3, methods: saved.methods || [...defaultForecastMethods], historyMonths: saved.historyMonths ?? 3, lookback: saved.lookback || 3, overrides: saved.overrides || {}, assumptions: saved.assumptions || {}, editId: null, imported: false, scenario: saved.scenario || 'same', balanceSource: saved.balanceSource || 'manual' };
 let toastTimeout;
 function toast(message) { $('toast').textContent = message; $('toast').hidden = false; clearTimeout(toastTimeout); toastTimeout = setTimeout(() => { $('toast').hidden = true; }, 4500); }
 let loaded = false, saveTimer, pendingSettings, saveChain = Promise.resolve();
@@ -44,11 +45,11 @@ function api(path, options = {}) {
   return operation;
 }
 function currentSettings() {
-  return { fields: Object.fromEntries(['cash', 'savings', 'buffer', 'balance-date', 'adjustment', 'one-off'].map(id => [id, $(id).value])), horizon: state.horizon, lookback: state.lookback, assumptions: { ...state.assumptions }, scenario: state.scenario, balanceSource: state.balanceSource };
+  return { fields: Object.fromEntries(['cash', 'savings', 'buffer', 'balance-date', 'adjustment', 'one-off'].map(id => [id, $(id).value])), horizon: state.horizon, methods: [...state.methods], historyMonths: state.historyMonths, lookback: state.lookback, assumptions: { ...state.assumptions }, scenario: state.scenario, balanceSource: state.balanceSource };
 }
 function applySettings(settings) {
   if (!settings) return;
-  state.horizon = settings.horizon || 3; state.lookback = settings.lookback || 3; state.assumptions = settings.assumptions || {}; state.scenario = settings.scenario || 'same'; state.balanceSource = settings.balanceSource || 'manual';
+  state.horizon = settings.horizon || 3; state.methods = settings.methods || [...defaultForecastMethods]; state.historyMonths = settings.historyMonths ?? 3; state.lookback = settings.lookback || 3; state.assumptions = settings.assumptions || {}; state.scenario = settings.scenario || 'same'; state.balanceSource = settings.balanceSource || 'manual';
   const defaults = { cash: '', savings: '', buffer: '', 'balance-date': today, adjustment: '0', 'one-off': '0' };
   for (const id of Object.keys(defaults)) $(id).value = settings.fields?.[id] ?? defaults[id];
 }
@@ -223,25 +224,39 @@ function fieldCents(id, allowBlank = false) {
   if (!input.validity.valid || !Number.isFinite(Number(value))) return NaN;
   return Math.round(Number(value) * 100);
 }
-function activeAssumptions() {
-  return Object.fromEntries(['income', 'expense', 'saving'].map(key => [key, state.assumptions[key] ?? state.base[key]]));
+function forecastHistoryDate() {
+  const latest = state.data.metadata.lastDate || today;
+  const balanceDate = $('balance-date').value;
+  return balanceDate && balanceDate < latest ? balanceDate : latest;
+}
+function forecastBaseline() {
+  return baseline(state.transactions, forecastHistoryDate(), state.lookback, state.data.metadata.firstDate);
+}
+function activeAssumptions(base = forecastBaseline()) {
+  return Object.fromEntries(['income', 'expense', 'saving'].map(key => [key, state.assumptions[key] ?? base[key]]));
 }
 function renderForecast() {
   const accountBalancesReady = syncAccountStartingPoint();
-  const b = state.base, a = activeAssumptions();
+  const b = forecastBaseline(), a = activeAssumptions(b);
   if (state.scenario === 'less' || state.scenario === 'more') $('adjustment').value = ((state.scenario === 'less' ? -1 : 1) * a.expense / 1000).toFixed(2);
   for (const key of ['income', 'expense', 'saving']) if (document.activeElement !== $(key)) $(key).value = (a[key] / 100).toFixed(2);
   $('lookback').value = String(state.lookback);
   $('baseline-caption').textContent = b.months ? `${monthText(b.start)}–${monthText(b.end)} · ${b.months} complete months. ${Object.keys(state.assumptions).length ? 'Custom amounts are active.' : 'Income uses salary rows only.'}` : 'No complete months available. Set all three monthly assumptions yourself.';
   const cash = fieldCents('cash', true), savings = fieldCents('savings'), buffer = fieldCents('buffer'), adjustment = fieldCents('adjustment'), oneOff = fieldCents('one-off');
   const balanceDate = $('balance-date').value;
-  document.querySelectorAll('[data-horizon]').forEach(el => { const active = Number(el.dataset.horizon) === state.horizon; el.classList.toggle('selected', active); el.setAttribute('aria-pressed', String(active)); });
+  $('forecast-horizon').value = String(state.horizon);
+  $('forecast-history').value = String(state.historyMonths);
   document.querySelectorAll('[data-scenario]').forEach(el => { const active = el.dataset.scenario === state.scenario; el.classList.toggle('selected', active); el.setAttribute('aria-pressed', String(active)); });
   const invalid = !accountBalancesReady || [cash ?? 0, savings, buffer, adjustment, oneOff, ...Object.values(a)].some(n => !Number.isFinite(n)) || !/^\d{4}-\d{2}-\d{2}$/.test(balanceDate) || a.expense + adjustment < 0 || (!b.months && ['income', 'expense', 'saving'].some(key => state.assumptions[key] === undefined));
   const p = !invalid ? project({ cash, savings, buffer, ...a, adjustment, oneOff, horizon: state.horizon, asOf: balanceDate }) : null;
   state.projection = p;
-  if (p) renderForecastChart(cash, p, buffer, balanceDate);
-  else $('forecast-chart').innerHTML = `<div class="empty-state"><div class="empty-state-icon" aria-hidden="true">↗</div><h3>${invalid ? 'Check your assumptions.' : 'Start with what you have.'}</h3><p>${invalid ? 'Enter valid balances, a balance date, and nonnegative monthly amounts. A spending change cannot reduce total spending below zero. With no complete history, set all three monthly assumptions.' : 'Enter your available cash on the left. Then explore how your recent income and spending could shape the next few months.'}</p></div>`;
+  const methods = methodForecasts({ transactions: state.transactions, firstDate: state.data.metadata.firstDate, historyAsOf: forecastHistoryDate(), lookback: state.lookback, assumptions: a, cash: p ? cash : null, savings, buffer, adjustment, oneOff, horizon: state.horizon, asOf: balanceDate });
+  renderForecastMethods(methods);
+  const comparisons = methods.filter(method => state.methods.includes(method.id) && method.projection);
+  const paths = p ? [{ id: 'balance', name: 'Your scenario', color: 'var(--chart-4)', projection: p }, ...comparisons] : [];
+  $('forecast-history-note').textContent = b.months ? `History: ${monthText(b.start)}–${monthText(b.end)} · ${b.months} complete months. Historical methods use their own estimates; manual monthly inputs affect your scenario and unchanged assumptions. The spending change and one-off apply to all except unchanged assumptions.` : 'No complete history at this balance date. Enter all three monthly assumptions to use your scenario and unchanged assumptions.';
+  if (p) renderForecastChart(cash, paths, buffer, balanceDate);
+  else { $('forecast-chart-history-note').textContent = ''; $('forecast-chart').innerHTML = `<div class="empty-state"><div class="empty-state-icon" aria-hidden="true">↗</div><h3>${invalid ? 'Check your assumptions.' : 'Start with what you have.'}</h3><p>${invalid ? 'Enter valid balances, a balance date, and nonnegative monthly amounts. A spending change cannot reduce total spending below zero. With no complete history, set all three monthly assumptions.' : 'Enter your available cash on the left. Then explore how your recent income and spending could shape the next few months.'}</p></div>`; }
   const net = a.income - a.expense - a.saving - adjustment;
   renderStatistics($('forecast-stats'), [
     ['Monthly cash change', Number.isFinite(net) ? money(net) : '—', net < 0 ? 'negative' : 'positive'],
@@ -260,14 +275,34 @@ function renderForecast() {
   else if (p.reserveNeeded > 0) $('forecast-message').textContent = `At the lowest monthly checkpoint, you would need ${money(p.reserveNeeded)} from your reserve to maintain your ${money(buffer)} buffer. ${p.uncovered > 0 ? `Your entered reserve falls short by ${money(p.uncovered)}.` : `Your reserve could cover it, leaving ${money(Math.max(0, savings - p.reserveNeeded))}.`} ${p.breakEvenCut > 0 ? `Reducing monthly outflows by ${money(p.breakEvenCut)} would stop the ongoing cash decline.` : ''}`;
   else if (p.monthlyNet < 0) $('forecast-message').textContent = `Your cash is decreasing by ${money(-p.monthlyNet)} per month. Your starting cash covers this ${state.horizon}-month scenario, with ${money(p.headroom)} above your chosen buffer at the end. Reducing monthly outflows by ${money(p.breakEvenCut)} would stop the ongoing cash decline.`;
   else $('forecast-message').textContent = `This scenario ends ${money(p.headroom)} above your chosen buffer. Monthly cash ${p.monthlyNet === 0 ? 'stays level' : `grows by ${money(p.monthlyNet)}`}. This is end-of-period headroom; payment timing within the month is not modeled.`;
-  $('forecast-table').innerHTML = p ? `<div class="table-scroll"><table><thead><tr><th>Date</th><th class="numeric">Cash change</th><th class="numeric">Available cash*</th><th class="numeric">Reserve needed*</th></tr></thead><tbody>${p.points.map((point, i) => `<tr><td>${dateText(point.date)}</td><td class="numeric ${p.monthlyNet - (i === 0 ? oneOff : 0) < 0 ? 'negative' : 'positive'}">${money(p.monthlyNet - (i === 0 ? oneOff : 0))}</td><td class="numeric ${point.balance < 0 ? 'negative' : ''}">${money(point.balance)}</td><td class="numeric">${money(point.reserveNeeded)}</td></tr>`).join('')}</tbody></table></div><p class="input-note">*Cash before drawing from savings. Reserve needed is cumulative to restore the buffer at each date. Negative cash shows a shortfall. Do not add the reserve-needed rows together.</p>` : '<p class="no-results">Your monthly estimates will appear once your starting balance is entered.</p>';
+  renderForecastComparison(paths, cash, balanceDate);
+  $('forecast-table').innerHTML = p ? `<div class="table-scroll"><table><caption class="sr-only">Monthly cash projections by method</caption><thead><tr><th scope="col">Date</th>${paths.map(path => `<th scope="col" class="numeric">${esc(path.name)}</th>`).join('')}<th scope="col" class="numeric">Scenario cash change</th><th scope="col" class="numeric">Scenario reserve needed</th></tr></thead><tbody>${p.points.map((point, i) => `<tr><th scope="row">${dateText(point.date)}</th>${paths.map(path => `<td class="numeric ${path.projection.points[i].balance < 0 ? 'negative' : ''}">${exactMoney(path.projection.points[i].balance)}</td>`).join('')}<td class="numeric">${exactMoney(point.cashChange)}</td><td class="numeric">${exactMoney(point.reserveNeeded)}</td></tr>`).join('')}</tbody></table></div><p class="input-note">Cash before drawing from savings. Reserve needed is cumulative to restore the buffer at each date. Negative cash shows a shortfall. Do not add reserve-needed rows together.</p>` : '<p class="no-results">Your monthly estimates will appear once your starting balance is entered.</p>';
 }
-function renderForecastChart(cash, projection, buffer, balanceDate) {
-  const a = activeAssumptions();
-  const unchanged = project({ cash, ...a, horizon: state.horizon, asOf: balanceDate, buffer });
-  const points = [{ date: balanceDate, balance: cash, unchanged: cash }, ...projection.points.map((point, i) => ({ ...point, unchanged: unchanged.points[i].balance }))];
-  renderTimeSeriesChart($('forecast-chart'), { points, series: [{ key: 'unchanged', name: 'Unchanged spending · no one-off', color: 'var(--chart-label)', dashed: true }, { key: 'balance', name: 'Your scenario', color: 'var(--chart-4)' }], references: [{ name: 'Cash buffer', value: buffer }], title: 'Forecast cash: your scenario and unchanged spending', tooltipRows: point => [{ name: 'Scenario difference', value: exactMoney(point.balance - point.unchanged) }], format: exactMoney, label: point => dateText(point.date), width: $('forecast-chart').clientWidth });
+function renderForecastMethods(methods) {
+  const container = $('forecast-method-options');
+  // Keep the focused checkbox in place while chart and outcomes redraw.
+  if (!container.children.length) container.innerHTML = methods.map(method => `<label class="forecast-method"><input type="checkbox" data-forecast-method="${method.id}" aria-describedby="method-${method.id}-note"><span><strong>${esc(method.name)}</strong><small id="method-${method.id}-note"></small></span></label>`).join('');
+  for (const method of methods) {
+    const checkbox = container.querySelector(`[data-forecast-method="${method.id}"]`);
+    checkbox.checked = state.methods.includes(method.id);
+    checkbox.disabled = !!method.reason;
+    $('method-' + method.id + '-note').textContent = `${method.description}${method.reason ? ' ' + method.reason : ''}`;
+  }
 }
+function renderForecastComparison(paths, cash, balanceDate) {
+  $('forecast-comparison').innerHTML = paths.length ? `<div class="table-scroll"><table><caption class="sr-only">Projection outcomes after ${state.horizon} months</caption><thead><tr><th scope="col">Method</th><th scope="col" class="numeric">Final cash</th><th scope="col" class="numeric">Vs. your scenario</th><th scope="col" class="numeric">Lowest cash*</th><th scope="col" class="numeric">Peak reserve needed</th></tr></thead><tbody>${paths.map(path => {
+    const projection = path.projection;
+    const lowest = projection.points.reduce((low, point) => point.balance < low.balance ? point : low, { date: balanceDate, balance: cash });
+    return `<tr><th scope="row">${esc(path.name)}</th><td class="numeric ${projection.endBalance < 0 ? 'negative' : ''}">${exactMoney(projection.endBalance)}</td><td class="numeric">${exactMoney(projection.endBalance - paths[0].projection.endBalance)}</td><td class="numeric">${exactMoney(lowest.balance)}<small>${dateText(lowest.date)}</small></td><td class="numeric">${exactMoney(projection.reserveNeeded)}</td></tr>`;
+  }).join('')}</tbody></table></div><p class="input-note">*Includes starting cash and monthly checkpoints. Summary cards and scenario insights describe your scenario. Each method uses the same starting cash, reserve, buffer, and horizon. Methods can overlap on the chart.</p>` : '<p class="no-results">Enter valid starting balances and assumptions to compare outcomes.</p>';
+}
+function renderForecastChart(cash, paths, buffer, balanceDate) {
+  const history = historicalCash({ transactions: state.transactions, firstDate: state.data.metadata.firstDate, lastDate: state.data.metadata.lastDate, cash, asOf: balanceDate, months: state.historyMonths });
+  $('forecast-chart-history-note').textContent = !state.historyMonths ? 'Showing future projections only.' : history.length ? `History is reconstructed from recorded cash movements, anchored to your starting cash on ${dateText(balanceDate)}. It includes one-offs and other incoming money; it is not a record of observed bank balances.${state.data.metadata.lastDate < balanceDate ? ' The latest transactions predate your balance; missing movements can affect the reconstruction.' : ''}` : 'No recorded history before this balance date in the selected chart window.';
+  const points = [...history, { date: balanceDate, starting: true, ...(history.length ? { history: cash } : {}), ...Object.fromEntries(paths.map(path => [path.id, cash])) }, ...paths[0].projection.points.map((point, i) => ({ date: point.date, ...Object.fromEntries(paths.map(path => [path.id, path.projection.points[i].balance])) }))];
+  renderTimeSeriesChart($('forecast-chart'), { points, series: [...(history.length ? [{ key: 'history', name: 'Reconstructed cash history', color: 'var(--chart-6)' }] : []), ...paths.map(path => ({ key: path.id, name: path.name, color: path.color, dashed: path.dashed }))], markers: [{ index: history.length, name: 'Forecast starts' }], timeSpacing: true, references: [{ name: 'Cash buffer', value: buffer }], title: 'Cash forecast comparison by projection method', format: exactMoney, label: point => dateText(point.date), width: $('forecast-chart').clientWidth });
+}
+
 function filteredTransactions() {
   const query = $('search').value.toLocaleLowerCase().trim();
   const category = $('category-filter').value, kind = $('kind-filter').value;
@@ -384,7 +419,6 @@ document.addEventListener('click', event => {
     renderTransactions(); showView('transactions');
   }
   if (el.dataset.edit) editTransaction(el.dataset.edit);
-  if (el.dataset.horizon) { state.horizon = Number(el.dataset.horizon); renderForecast(); persist(); }
   if (el.dataset.scenario) {
     state.scenario = el.dataset.scenario;
     const expense = activeAssumptions().expense;
@@ -395,6 +429,14 @@ document.addEventListener('click', event => {
 $('period').addEventListener('change', () => { state.page = 0; renderOverview(); renderTransactions(); });
 $('overview-grouping').addEventListener('change', () => renderOverview());
 $('overview-scale').addEventListener('change', () => renderOverview());
+$('forecast-history').addEventListener('change', () => { state.historyMonths = Number($('forecast-history').value); renderForecast(); persist(); });
+$('forecast-horizon').addEventListener('change', () => { state.horizon = Number($('forecast-horizon').value); renderForecast(); persist(); });
+$('forecast-method-options').addEventListener('change', event => {
+  const method = event.target.dataset.forecastMethod;
+  if (!method) return;
+  state.methods = event.target.checked ? [...new Set([...state.methods, method])] : state.methods.filter(id => id !== method);
+  renderForecast(); persist();
+});
 $('forecast-scale').addEventListener('change', () => renderForecast());
 $('transactions-scale').addEventListener('change', () => renderTransactions());
 for (const id of ['range-start', 'range-end']) $(id).addEventListener('change', () => { state.page = 0; renderOverview(); renderTransactions(); });
@@ -474,7 +516,7 @@ $('clear-saved').addEventListener('click', async () => {
   if (!confirm('Reset forecast settings and transaction edits? Transactions and account balances remain in the ledger.')) return;
   try {
     state.overrides = (await api('/api/overrides', { method: 'PUT', body: { overrides: {}, resetCategories: true } })).overrides;
-    state.assumptions = {}; state.lookback = 3; state.horizon = 3; state.scenario = 'same'; state.balanceSource = 'manual';
+    state.assumptions = {}; state.lookback = 3; state.horizon = 3; state.methods = [...defaultForecastMethods]; state.historyMonths = 3; state.scenario = 'same'; state.balanceSource = 'manual';
     for (const id of ['cash', 'savings', 'buffer']) $(id).value = '';
     $('adjustment').value = '0'; $('one-off').value = '0'; $('balance-date').value = today;
     await loadLocal(); persist(); toast('Forecast settings and transaction edits reset.');
