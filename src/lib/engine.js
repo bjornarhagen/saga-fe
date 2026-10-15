@@ -75,7 +75,12 @@ export function applyOverrides(transactions, overrides = {}) {
       movementKind = available(from) === available(to) ? 'transfer' : t.amount < 0 && available(from) ? 'saving' : t.amount > 0 && available(to) ? 'income' : 'transfer';
     }
     const kind = o.kind || movementKind || t.kind;
-    return { ...t, ...o, kind, ownedMovement: !!ownedMovement, review: t.review && !o.kind && !ownedMovement,
+    const suggestion = t.categorySuggestion;
+    const applied = suggestion && ['auto_applied', 'user_applied'].includes(suggestion.status);
+    const category = o.category || (applied ? suggestion.category : t.category);
+    return { ...t, ...(applied ? { category } : {}), ...o, kind, ownedMovement: !!ownedMovement,
+      subcategory: category !== t.category ? '' : t.subcategory,
+      review: suggestion?.status === 'auto_applied' || (t.review && !o.kind && !ownedMovement && suggestion?.status !== 'user_applied'),
       regularIncome: !ownedMovement && kind === 'income' && t.regularIncome };
   });
 }

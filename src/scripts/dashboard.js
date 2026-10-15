@@ -1,3 +1,5 @@
+import { createCategorizationController, categoryControls, matchesCategoryStatus } from './categorization.js';
+import { isUncategorized } from '../lib/categorization.js';
 import { createAccountController } from './accounts.js';
 import { createExplorer } from './explorer.js';
 import { parseRoute, routeHash, parentView } from './routes.js';
@@ -82,6 +84,7 @@ function persist() {
   }, 500);
 }
 const explorer = createExplorer({ api, exactMoney, dateText, getTransactions: () => state.transactions, editTransaction, reloadLedger: async () => { if (await loadLocal() === false) throw new Error('The saved detail could not be refreshed.'); }, notify: toast });
+const categorization = createCategorizationController({ api, getTransactions: () => state.transactions, reload: async () => { await loadLocal(); persist(); }, notify: toast, onError: handleError, exactMoney, dateText });
 const accountController = createAccountController({ api, money, today, onChange: () => loadLocal(), onUse: () => { state.balanceSource = 'accounts'; renderForecast(); persist(); showView('forecast'); }, onError: handleError, toast,
   activityLink: account => { const node = explorer.endpointForAccount(account.id); return node ? `<p class="input-note">${explorer.endpointLink({ ...node, name: 'View payment history →' })}</p>` : ''; }
 });
@@ -269,7 +272,7 @@ function filteredTransactions() {
   const query = $('search').value.toLocaleLowerCase().trim();
   const category = $('category-filter').value, kind = $('kind-filter').value;
   const tx = $('transaction-period').value === 'all' ? state.transactions : selectedTransactions();
-  const result = tx.filter(t => (!query || `${t.description} ${t.category} ${t.subcategory} ${t.account} ${t.fromAccount} ${t.toAccount} ${t.counterparty} ${t.fromEndpoint?.name || ''} ${t.toEndpoint?.name || ''}`.toLocaleLowerCase().includes(query)) && (!category || t.category === category) && (!kind || t.kind === kind) && (!$('review-only').checked || t.review) && (!$('excluded-only').checked || t.excludeForecast));
+  const result = tx.filter(t => (!query || `${t.description} ${t.category} ${t.subcategory} ${t.account} ${t.fromAccount} ${t.toAccount} ${t.counterparty} ${t.fromEndpoint?.name || ''} ${t.toEndpoint?.name || ''}`.toLocaleLowerCase().includes(query)) && (!category || t.category === category) && (!kind || t.kind === kind) && (!$('review-only').checked || t.review) && (!$('excluded-only').checked || t.excludeForecast) && matchesCategoryStatus(t, $('category-status-filter').value));
   const sort = $('transaction-sort').value;
   return result.sort((a, b) => sort === 'outflow' ? a.amount - b.amount : sort === 'inflow' ? b.amount - a.amount : sort === 'oldest' ? a.date.localeCompare(b.date) : b.date.localeCompare(a.date));
 }
@@ -278,6 +281,8 @@ function renderTransactions() {
   const previous = $('category-filter').value;
   $('category-filter').innerHTML = '<option value="">All categories</option>' + categories.map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join('');
   $('category-filter').value = categories.includes(previous) ? previous : '';
+  $('show-uncategorized').textContent = `Uncategorized (${state.transactions.filter(isUncategorized).length})`;
+  $('show-category-review').textContent = `Review suggestions (${state.transactions.filter(t => matchesCategoryStatus(t, 'pending')).length})`;
   const tx = filteredTransactions(); const perPage = 40;
   state.page = Math.max(0, Math.min(state.page, Math.ceil(tx.length / perPage) - 1));
   const shown = tx.slice(state.page * perPage, (state.page + 1) * perPage);
@@ -294,7 +299,7 @@ function renderTransactions() {
   renderTimeSeriesChart($('transaction-trend-chart'), { points: tx.length ? history.points : [], series: [{ key: 'income', name: 'Money in', color: 'var(--chart-in)' }, { key: 'expense', name: 'Spending', color: 'var(--chart-out)' }, { key: 'saving', name: 'Savings & investments', color: 'var(--chart-3)' }], title: 'Filtered transaction activity in NOK', format: exactMoney, label: point => history.interval === 'month' ? monthText(point.date.slice(0, 7)) : dateText(point.date).replace(/ \d{4}$/, ''), width: $('transaction-trend-chart').clientWidth, empty: 'No transactions match these filters.' });
   $('transaction-trend-note').textContent = `${{ day: 'Daily', week: '7-day', month: 'Monthly' }[history.interval]} totals for all matching pages. First and last periods may be partial. Internal transfers are excluded.`;
   const kindLabels = { expense: 'Spending', income: 'Money in', saving: 'Savings', transfer: 'Transfer' };
-  $('transaction-rows').innerHTML = shown.length ? shown.map(t => { const node = explorer.endpointForAccount(t.accountId); return `<tr><td>${dateText(t.date)}<small>${node ? explorer.endpointLink(node) : esc(t.account || 'Unknown account')}</small></td><td><a class="ledger-link" href="${esc(routeHash({ view: 'transaction', id: t.id }))}">${esc(t.description || 'Untitled transaction')}</a>${t.review ? '<small class="review-tag">● Needs review</small>' : ''}${t.excludeForecast ? '<small>One-off · excluded from forecast</small>' : ''}</td><td>${esc(t.category)}<small>${esc(t.subcategory)}</small></td><td><span class="badge ${t.kind}">${kindLabels[t.kind]}</span></td><td class="numeric ${t.amount > 0 ? 'positive' : ''}">${t.amount > 0 ? '+' : ''}${money(t.amount)}</td><td><button class="edit-button" data-edit="${esc(t.id)}" aria-label="Review ${esc(t.description)}">Edit</button></td></tr>`; }).join('') : '<tr><td colspan="6" class="no-results">No transactions match these filters.</td></tr>';
+  $('transaction-rows').innerHTML = shown.length ? shown.map(t => { const node = explorer.endpointForAccount(t.accountId); return `<tr><td>${dateText(t.date)}<small>${node ? explorer.endpointLink(node) : esc(t.account || 'Unknown account')}</small></td><td><a class="ledger-link" href="${esc(routeHash({ view: 'transaction', id: t.id }))}">${esc(t.description || 'Untitled transaction')}</a>${t.review ? '<small class="review-tag">● Needs review</small>' : ''}${t.excludeForecast ? '<small>One-off · excluded from forecast</small>' : ''}</td><td>${esc(t.category)}<small>${esc(t.subcategory)}</small>${categoryControls(t)}</td><td><span class="badge ${t.kind}">${kindLabels[t.kind]}</span></td><td class="numeric ${t.amount > 0 ? 'positive' : ''}">${t.amount > 0 ? '+' : ''}${money(t.amount)}</td><td><button class="edit-button" data-edit="${esc(t.id)}" aria-label="Review ${esc(t.description)}">Edit</button></td></tr>`; }).join('') : '<tr><td colspan="6" class="no-results">No transactions match these filters.</td></tr>';
   $('page-label').textContent = tx.length ? `${state.page * perPage + 1}–${Math.min((state.page + 1) * perPage, tx.length)} of ${number.format(tx.length)}` : '0 transactions';
   $('previous-page').disabled = state.page === 0;
   $('next-page').disabled = (state.page + 1) * perPage >= tx.length;
@@ -323,9 +328,10 @@ function editTransaction(id) {
     control.value = source?.owned ? source.accountId : state.overrides[id]?.[`${side}OwnedAccountId`] || '';
     control.disabled = !!source?.owned;
   }
+  categorization.renderReview(tx);
   $('edit-dialog').showModal();
 }
-function clearFilters() { $('search').value = ''; $('category-filter').value = ''; $('kind-filter').value = ''; $('review-only').checked = false; $('excluded-only').checked = false; $('transaction-sort').value = 'newest'; state.page = 0; }
+function clearFilters() { $('category-status-filter').value = ''; $('search').value = ''; $('category-filter').value = ''; $('kind-filter').value = ''; $('review-only').checked = false; $('excluded-only').checked = false; $('transaction-sort').value = 'newest'; state.page = 0; }
 let loadGeneration = 0;
 async function loadLocal() {
   const generation = ++loadGeneration;
@@ -392,7 +398,7 @@ $('overview-scale').addEventListener('change', () => renderOverview());
 $('forecast-scale').addEventListener('change', () => renderForecast());
 $('transactions-scale').addEventListener('change', () => renderTransactions());
 for (const id of ['range-start', 'range-end']) $(id).addEventListener('change', () => { state.page = 0; renderOverview(); renderTransactions(); });
-for (const id of ['search', 'category-filter', 'kind-filter', 'transaction-period', 'transaction-sort', 'review-only', 'excluded-only']) $(id).addEventListener(id === 'search' ? 'input' : 'change', () => { state.page = 0; renderTransactions(); });
+for (const id of ['search', 'category-filter', 'category-status-filter', 'kind-filter', 'transaction-period', 'transaction-sort', 'review-only', 'excluded-only']) $(id).addEventListener(id === 'search' ? 'input' : 'change', () => { state.page = 0; renderTransactions(); });
 $('clear-filters').addEventListener('click', () => { clearFilters(); renderTransactions(); });
 $('previous-page').addEventListener('click', () => { state.page--; renderTransactions(); });
 $('next-page').addEventListener('click', () => { state.page++; renderTransactions(); });
@@ -402,6 +408,7 @@ for (const id of ['cash', 'savings', 'buffer', 'balance-date', 'adjustment', 'on
 for (const id of ['income', 'expense', 'saving']) $(id).addEventListener('input', () => { state.assumptions[id] = fieldCents(id); if (id === 'expense') state.scenario = 'custom'; renderForecast(); persist(); });
 $('lookback').addEventListener('change', () => { state.lookback = Number($('lookback').value); state.assumptions = {}; recalculate(); persist(); });
 $('reset-baseline').addEventListener('click', () => { state.assumptions = {}; $('adjustment').value = '0'; state.scenario = 'same'; renderForecast(); persist(); toast('Monthly assumptions restored from your history.'); });
+for (const [id, status] of [['show-uncategorized', 'uncategorized'], ['show-category-review', 'pending']]) $(id).addEventListener('click', () => { clearFilters(); $('transaction-period').value = 'all'; $('category-status-filter').value = status; renderTransactions(); });
 $('close-dialog').addEventListener('click', () => $('edit-dialog').close());
 $('edit-form').addEventListener('submit', async event => {
   event.preventDefault();
@@ -412,10 +419,17 @@ $('edit-form').addEventListener('submit', async event => {
     if (!control.disabled && control.value) override[`${side}OwnedAccountId`] = control.value;
   }
   if (!override.category) return;
-  try { const result = await api('/api/overrides', { method: 'PATCH', body: { id: state.editId, override } }); state.overrides = result.overrides; $('edit-dialog').close(); await loadLocal(); persist(); toast('Transaction updated in your ledger.'); } catch (error) { handleError(error); }
+  const anchor = state.transactions.find(t => t.id === state.editId);
+  const submit = event.submitter; if (submit) submit.disabled = true;
+  try {
+    await api('/api/overrides', { method: 'PATCH', body: { id: state.editId, override } });
+    $('edit-dialog').close(); await loadLocal(); persist(); toast('Transaction updated in your ledger.');
+    if (anchor && (override.category !== anchor.category || matchesCategoryStatus(anchor, 'pending'))) categorization.offerSimilar(state.transactions.find(row => row.id === anchor.id) || anchor, override.category, 'user_applied');
+  } catch (error) { handleError(error); }
+  finally { if (submit) submit.disabled = false; }
 });
 $('reset-transaction').addEventListener('click', async () => {
-  try { const result = await api('/api/overrides', { method: 'PATCH', body: { id: state.editId, override: null } }); state.overrides = result.overrides; $('edit-dialog').close(); await loadLocal(); persist(); toast('Original source classification restored.'); } catch (error) { handleError(error); }
+  try { const result = await api('/api/overrides', { method: 'PATCH', body: { id: state.editId, override: null } }); state.overrides = result.overrides; $('edit-dialog').close(); await loadLocal(); persist(); toast('Transaction edits reset. Suggestions recalculated.'); } catch (error) { handleError(error); }
 });
 $('import-button').addEventListener('click', () => $('csv-input').click());
 $('data-import-button').addEventListener('click', () => $('csv-input').click());
@@ -459,11 +473,11 @@ $('reload-button').addEventListener('click', async () => { try { await loadLocal
 $('clear-saved').addEventListener('click', async () => {
   if (!confirm('Reset forecast settings and transaction edits? Transactions and account balances remain in the ledger.')) return;
   try {
-    state.overrides = (await api('/api/overrides', { method: 'PUT', body: { overrides: {} } })).overrides;
+    state.overrides = (await api('/api/overrides', { method: 'PUT', body: { overrides: {}, resetCategories: true } })).overrides;
     state.assumptions = {}; state.lookback = 3; state.horizon = 3; state.scenario = 'same'; state.balanceSource = 'manual';
     for (const id of ['cash', 'savings', 'buffer']) $(id).value = '';
     $('adjustment').value = '0'; $('one-off').value = '0'; $('balance-date').value = today;
-    recalculate(); persist(); toast('Forecast settings and transaction edits reset.');
+    await loadLocal(); persist(); toast('Forecast settings and transaction edits reset.');
   } catch (error) { handleError(error); }
 });
 $('balance-source').addEventListener('change', () => { state.balanceSource = $('balance-source').value; renderForecast(); persist(); });

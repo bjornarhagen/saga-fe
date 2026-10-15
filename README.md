@@ -29,6 +29,36 @@ settings, and transaction edits survive app restarts and browser changes.
 `docker compose down` stops this project's service and keeps the named volume.
 Removing that volume removes the ledger.
 
+## Category assistance
+
+In **Transactions**, use **Uncategorized** to see uncategorized payments across
+all history, or **Review suggestions** to review pending and automatic categories.
+Categories come from payments with the same external sender or receiver, payment
+type, direction and currency. Unknown identities and internal transfers do not
+produce suggestions.
+
+Suggestions have four states: **Suggested · not applied**, **Auto applied ·
+unconfirmed**, **Chosen by you**, and **Suggestion rejected**. Five categorized
+examples must agree unanimously before a stable account or counterparty identity
+can receive an automatic category. Text-only merchant hints require review.
+Repeated identical import rows count as one example.
+Automatic categories affect category totals but stay flagged for review; they
+never train further suggestions. Suggestions are recalculated from current source
+categories and explicit choices, so changed evidence can withdraw an automatic
+category. User choices take precedence.
+
+Accepting or rejecting opens a preview for similar payments. Select all matches
+or individual payments, and optionally narrow the absolute amount range in NOK.
+Existing categories and earlier user decisions are protected by default. The
+explicit option to include categorized payments allows replacing those choices.
+Only the category decision is copied; payment type and forecast exclusions stay
+with each payment. Changing a category manually also offers the preview.
+
+Category decisions are saved in SQLite separately from imports and included in
+full JSON exports and SQLite backups. Resetting a category clears its decision
+and recalculates suggestions. Resetting all transaction edits also clears category
+decisions. Imported records and account balances remain unchanged.
+
 ## Development and checks
 
 The development service mounts source files read-only and runs Astro with live

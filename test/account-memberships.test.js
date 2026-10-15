@@ -4,7 +4,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createStore, LEDGER_TABLES } from '../src/server/database.js';
+import { createStore, LEDGER_TABLES, DATABASE_SCHEMA_VERSION } from '../src/server/database.js';
 
 function memory(t) { const store = createStore(); t.after(() => store.close()); return store; }
 function directory(t) { const path = mkdtempSync(join(tmpdir(), 'saga-fe-membership-')); t.after(() => rmSync(path, { recursive: true, force: true })); return path; }
@@ -98,8 +98,8 @@ test('decisions persist after source corrections, reimports, reopening and full 
   assert.equal(store.getTransactionDetail(a.id).sourceTo.id, b.toEndpointId);
   assert.equal(store.getEndpointActivity(a.toEndpointId).summaries.confirmed.payments, 1);
   const decisions = store.getAccountMemberships(), archive = store.exportLedger();
-  assert.equal(archive.databaseSchemaVersion, 4);
-  assert.equal(Object.keys(archive.tables).length, 18);
+  assert.equal(archive.databaseSchemaVersion, DATABASE_SCHEMA_VERSION);
+  assert.equal(Object.keys(archive.tables).length, LEDGER_TABLES.length);
   assert.equal(archive.tables.external_endpoint_refs.length, 1);
   await store.backup(snapshot); store.close(); store = createStore(path); t.after(() => store.close());
   assert.deepEqual(store.getAccountMemberships(), decisions);
@@ -113,8 +113,8 @@ test('version-two migration preserves existing pair decisions and creates no inf
   let store = createStore(path); const { a, b } = seed(store);
   store.updateRelation({ transactionId: a.id, relatedTransactionId: b.id, status: 'confirmed' });
   const pairs = store.getRelations(), original = store.exportLedger().tables;
-  delete original.external_endpoint_refs; delete original.transaction_account_memberships; store.close();
-  const legacy = new DatabaseSync(path); legacy.exec('DROP TABLE account_profiles; DROP TABLE transaction_account_memberships; DROP TABLE external_endpoint_refs; PRAGMA user_version=2'); legacy.close();
+  delete original.external_endpoint_refs; delete original.transaction_category_decisions; delete original.account_profiles; delete original.transaction_account_memberships; store.close();
+  const legacy = new DatabaseSync(path); legacy.exec('DROP TABLE account_profiles; DROP TABLE transaction_category_decisions; DROP TABLE transaction_account_memberships; DROP TABLE external_endpoint_refs; PRAGMA user_version=2'); legacy.close();
   store = createStore(path); t.after(() => store.close());
   assert.deepEqual(store.getRelations(), pairs);
   assert.deepEqual(store.getAccountMemberships(), { decisions: [] });
@@ -164,9 +164,9 @@ test('a reserved endpoint-reference table collision leaves version two and all p
   const path = join(directory(t), 'collision.sqlite');
   let store = createStore(path); const { a, b } = seed(store);
   store.updateRelation({ transactionId: a.id, relatedTransactionId: b.id, status: 'confirmed' });
-  const original = store.exportLedger().tables; delete original.external_endpoint_refs; delete original.transaction_account_memberships; store.close();
+  const original = store.exportLedger().tables; delete original.external_endpoint_refs; delete original.transaction_category_decisions; delete original.account_profiles; delete original.transaction_account_memberships; store.close();
   const legacy = new DatabaseSync(path);
-  legacy.exec("DROP TABLE account_profiles; DROP TABLE transaction_account_memberships; DROP TABLE external_endpoint_refs; CREATE TABLE external_endpoint_refs(unexpected TEXT); INSERT INTO external_endpoint_refs VALUES('synthetic-preserved'); PRAGMA user_version=2"); legacy.close();
+  legacy.exec("DROP TABLE account_profiles; DROP TABLE transaction_category_decisions; DROP TABLE transaction_account_memberships; DROP TABLE external_endpoint_refs; CREATE TABLE external_endpoint_refs(unexpected TEXT); INSERT INTO external_endpoint_refs VALUES('synthetic-preserved'); PRAGMA user_version=2"); legacy.close();
   assert.throws(() => createStore(path), /already exists/);
   const check = new DatabaseSync(path, { readOnly: true }); t.after(() => check.close());
   assert.equal(check.prepare('PRAGMA user_version').get().user_version, 2);

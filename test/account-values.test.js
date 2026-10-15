@@ -125,7 +125,7 @@ test('version-three migration, reimports, reopen and backup preserve owner profi
   let store = createStore(path); const { deposit } = seed(store);
   store.saveSettings({ fields: { cash: '123.45' } });
   store.close();
-  const legacy = new DatabaseSync(path); legacy.exec('DROP TABLE account_profiles; PRAGMA user_version=3'); legacy.close();
+  const legacy = new DatabaseSync(path); legacy.exec('DROP TABLE account_profiles; DROP TABLE transaction_category_decisions; PRAGMA user_version=3'); legacy.close();
   store = createStore(path);
   assert.equal(store.getAccounts().accounts[0].accountType, 'other');
   assert.equal(store.getSettings().fields.cash, '123.45');
@@ -143,4 +143,30 @@ test('version-three migration, reimports, reopen and backup preserve owner profi
     assert.equal(reopened.getTransactionDetail(deposit.id).transaction.kind, 'saving');
     reopened.close();
   }
+});
+
+
+test('version-four category decisions survive account-profile migration and later category edits preserve owned-payment links', t => {
+  const root = mkdtempSync(join(tmpdir(), 'saga-fe-values-v4-')); t.after(() => rmSync(root, { recursive: true, force: true }));
+  const path = join(root, 'ledger.sqlite');
+  let store = createStore(path); const { deposit } = seed(store);
+  store.updateCategories({ transactionIds: [deposit.id], category: 'Owner savings category', status: 'user_applied' });
+  store.saveSettings({ fields: { cash: '123.45' } });
+  const before = store.exportLedger().tables; delete before.account_profiles; store.close();
+  const legacy = new DatabaseSync(path); legacy.exec('DROP TABLE account_profiles; PRAGMA user_version=4'); legacy.close();
+  store = createStore(path); t.after(() => store.close());
+  for (const [table, rows] of Object.entries(before)) assert.deepEqual(store.exportLedger().tables[table], rows);
+  assert.equal(store.getTransactionDetail(deposit.id).transaction.category, 'Owner savings category');
+  const investment = store.createAccount({ name: 'Investment account', accountType: 'investment' }).account;
+  store.updateOverride({ id: deposit.id, override: { toOwnedAccountId: investment.id, excludeForecast: true } });
+  store.updateCategories({ transactionIds: [deposit.id], category: 'Another chosen category', status: 'user_applied' });
+  let detail = store.getTransactionDetail(deposit.id);
+  assert.equal(detail.transaction.kind, 'saving');
+  assert.equal(detail.transaction.category, 'Another chosen category');
+  assert.equal(detail.to.accountId, investment.id);
+  assert.equal(detail.transaction.excludeForecast, true);
+  store.updateCategories({ transactionIds: [deposit.id], status: null });
+  detail = store.getTransactionDetail(deposit.id);
+  assert.equal(detail.to.accountId, investment.id);
+  assert.equal(detail.transaction.kind, 'saving');
 });

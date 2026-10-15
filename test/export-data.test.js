@@ -4,7 +4,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createStore, LEDGER_TABLES } from '../src/server/database.js';
+import { createStore, LEDGER_TABLES, DATABASE_SCHEMA_VERSION } from '../src/server/database.js';
 
 test('complete JSON archive covers every schema table and preserves all saved ledger state', t => {
   const directory = mkdtempSync(join(tmpdir(), 'saga-fe-archive-test-'));
@@ -24,12 +24,13 @@ test('complete JSON archive covers every schema table and preserves all saved le
   const id = transactions[0].id;
   store.updateRelation({ transactionId: id, relatedTransactionId: transactions[1].id, status: 'confirmed' });
   store.updateAccountMembership({ transactionId: id, side: 'to', endpointId: store.getTransactionDetail(id).to.id, status: 'confirmed' });
+  store.updateCategories({ transactionIds: [id], category: 'Confirmed category', status: 'user_applied' });
   store.updateOverride({ id, override: { category: 'Owner category', excludeForecast: true } });
   store.saveSettings({ fields: { cash: '-1.05', 'balance-date': '2026-01-02' }, assumptions: { income: 10000 }, balanceSource: 'manual' });
   const archive = JSON.parse(JSON.stringify(store.exportLedger()));
   assert.equal(archive.format, 'saga-fe-ledger');
   assert.equal(archive.formatVersion, 1);
-  assert.equal(archive.databaseSchemaVersion, 4);
+  assert.equal(archive.databaseSchemaVersion, DATABASE_SCHEMA_VERSION);
   assert.equal(archive.amountUnit, 'ore');
   assert.equal(archive.currency, 'NOK');
   assert.ok(Number.isFinite(Date.parse(archive.exportedAt)));

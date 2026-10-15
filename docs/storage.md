@@ -54,7 +54,7 @@ balances are null, distinct from zero. A combined account-derived forecast is
 available only when every included account has a known balance for the same date.
 Reserve totals cannot be negative. Available accounts may be overdrawn.
 
-Schema version 4 adds `account_profiles`, with account type, institution and
+Schema version 5 adds `account_profiles`, with account type, institution and
 owner metadata override flags. Existing accounts migrate as `other` with their
 balances, roles, import identities and edits intact. Investment accounts must use
 `excluded`; they cannot supply forecast cash or reserves.

@@ -101,6 +101,6 @@ Both endpoints use the existing owner authentication boundary and attachment,
 `no-store` and `nosniff` response headers. They expose no environment values,
 authentication configuration, session data or server filesystem paths.
 
-Schema version 4 also preserves account type/institution profiles. Per-payment
+Schema version 5 also preserves account type/institution profiles. Per-payment
 owned-account links live in `transaction_edits`; dated valuations remain in
 `balance_snapshots`. Both are included in JSON and SQLite archives.

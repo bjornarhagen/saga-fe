@@ -78,12 +78,12 @@ test('schema one migrates atomically to the current version without changing sav
   let store = createStore(path); const { input, ids } = fixture(store);
   store.saveSettings({ fields: { cash: '1.05', 'balance-date': '2026-01-01' } });
   store.saveOverrides({ [ids[0]]: { category: 'Owner category', excludeForecast: true } });
-  const original = store.exportLedger().tables; delete original.transaction_relations; delete original.transaction_account_memberships; delete original.external_endpoint_refs;
+  const original = store.exportLedger().tables; delete original.transaction_relations; delete original.transaction_account_memberships; delete original.external_endpoint_refs; delete original.transaction_category_decisions; delete original.account_profiles;
   store.close();
   // An actual version-one schema: every original table and saved record,
   // with neither the new table nor its schema version present.
   const legacy = new DatabaseSync(path);
-  legacy.exec('DROP TABLE account_profiles; DROP TABLE transaction_account_memberships; DROP TABLE external_endpoint_refs; DROP TABLE transaction_relations; PRAGMA user_version=1');
+  legacy.exec('DROP TABLE account_profiles; DROP TABLE transaction_category_decisions; DROP TABLE transaction_account_memberships; DROP TABLE external_endpoint_refs; DROP TABLE transaction_relations; PRAGMA user_version=1');
   legacy.close();
   store = createStore(path);
   const migrated = store.exportLedger();
@@ -132,8 +132,8 @@ test('newer unsupported schemas are refused without changing their version or co
 test('a failed schema-two migration rolls back its new table and keeps version-one data intact', t => {
   const path = join(temporary(t), 'migration-failure.sqlite');
   const seed = createStore(path); fixture(seed);
-  const original = seed.exportLedger().tables; delete original.transaction_relations; delete original.transaction_account_memberships; delete original.external_endpoint_refs; seed.close();
-  const legacy = new DatabaseSync(path); legacy.exec('DROP TABLE account_profiles; DROP TABLE transaction_account_memberships; DROP TABLE external_endpoint_refs; DROP TABLE transaction_relations; PRAGMA user_version=1'); legacy.close();
+  const original = seed.exportLedger().tables; delete original.transaction_relations; delete original.transaction_account_memberships; delete original.external_endpoint_refs; delete original.transaction_category_decisions; delete original.account_profiles; seed.close();
+  const legacy = new DatabaseSync(path); legacy.exec('DROP TABLE account_profiles; DROP TABLE transaction_category_decisions; DROP TABLE transaction_account_memberships; DROP TABLE external_endpoint_refs; DROP TABLE transaction_relations; PRAGMA user_version=1'); legacy.close();
   const originalExec = DatabaseSync.prototype.exec;
   try {
     DatabaseSync.prototype.exec = function (sql) {
@@ -155,8 +155,8 @@ test('concurrent connections can open and migrate one version-one database witho
   const { Worker } = await import('node:worker_threads');
   const path = join(temporary(t), 'concurrent-migration.sqlite');
   const seed = createStore(path); const { ids } = fixture(seed);
-  const original = seed.exportLedger().tables; delete original.transaction_relations; delete original.transaction_account_memberships; delete original.external_endpoint_refs; seed.close();
-  const legacy = new DatabaseSync(path); legacy.exec('DROP TABLE account_profiles; DROP TABLE transaction_account_memberships; DROP TABLE external_endpoint_refs; DROP TABLE transaction_relations; PRAGMA user_version=1'); legacy.close();
+  const original = seed.exportLedger().tables; delete original.transaction_relations; delete original.transaction_account_memberships; delete original.external_endpoint_refs; delete original.transaction_category_decisions; delete original.account_profiles; seed.close();
+  const legacy = new DatabaseSync(path); legacy.exec('DROP TABLE account_profiles; DROP TABLE transaction_category_decisions; DROP TABLE transaction_account_memberships; DROP TABLE external_endpoint_refs; DROP TABLE transaction_relations; PRAGMA user_version=1'); legacy.close();
   const source = `const {parentPort,workerData}=require('node:worker_threads'); import(workerData.module).then(({createStore})=>{ const store=createStore(workerData.path); try { parentPort.postMessage({version:store.exportLedger().databaseSchemaVersion,decisions:store.getRelations().decisions.length}); } finally {store.close();} });`;
   const run = () => new Promise((resolve, reject) => {
     const worker = new Worker(source, { eval: true, workerData: { path, module: new URL('../src/server/database.js', import.meta.url).href } });
@@ -173,9 +173,9 @@ test('concurrent connections can open and migrate one version-one database witho
 test('an unexpected relation-table collision on schema one is refused without advancing or overwriting state', t => {
   const path = join(temporary(t), 'schema-collision.sqlite');
   const seed = createStore(path); fixture(seed);
-  const original = seed.exportLedger().tables; delete original.transaction_relations; delete original.transaction_account_memberships; delete original.external_endpoint_refs; seed.close();
+  const original = seed.exportLedger().tables; delete original.transaction_relations; delete original.transaction_account_memberships; delete original.external_endpoint_refs; delete original.transaction_category_decisions; delete original.account_profiles; seed.close();
   const legacy = new DatabaseSync(path);
-  legacy.exec("DROP TABLE account_profiles; DROP TABLE transaction_account_memberships; DROP TABLE external_endpoint_refs; DROP TABLE transaction_relations; CREATE TABLE transaction_relations(unexpected TEXT); INSERT INTO transaction_relations VALUES('synthetic-preserved'); PRAGMA user_version=1");
+  legacy.exec("DROP TABLE account_profiles; DROP TABLE transaction_category_decisions; DROP TABLE transaction_account_memberships; DROP TABLE external_endpoint_refs; DROP TABLE transaction_relations; CREATE TABLE transaction_relations(unexpected TEXT); INSERT INTO transaction_relations VALUES('synthetic-preserved'); PRAGMA user_version=1");
   legacy.close();
   assert.throws(() => createStore(path), /already exists/);
   const check = new DatabaseSync(path, { readOnly: true }); t.after(() => check.close());
