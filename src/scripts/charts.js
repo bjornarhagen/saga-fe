@@ -1,4 +1,6 @@
 import { pageChartScale, normalizeChartScale, chartScaleLabel } from './page-chart-scale.js';
+import { CHART_SCALES } from './page-chart-scale.js';
+import { registerBlock } from './block-dialog.js';
 
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const compact = new Intl.NumberFormat('en-GB', { notation: 'compact', maximumFractionDigits: 1 });
@@ -118,11 +120,11 @@ export function sparkline(values, color = 'var(--chart-1)', { title = 'Trend', p
 
 // Each visual includes exact figures in a keyboard-accessible table. Series
 // descriptors and colors are application constants; imported labels are escaped.
-export function timeSeriesChart({ points, series, title, format, label, width = 720, type = 'line', references = [], tooltipRows = () => [], empty = 'No recorded activity in this date range.', scale = 'linear', markers = [], timeSpacing = false }) {
+export function timeSeriesChart({ points, series, title, format, label, width = 720, height = 250, type = 'line', references = [], tooltipRows = () => [], empty = 'No recorded activity in this date range.', scale = 'linear', markers = [], timeSpacing = false }) {
   if (!points.length) return `<p class="no-results">${esc(empty)}</p>`;
   scale = normalizeChartScale(scale);
   const scaleName = chartScaleLabel(scale);
-  const w = Math.max(280, width), h = 250;
+  const w = Math.max(280, width), h = Math.max(250, height);
   const values = points.flatMap(point => series.map(item => point[item.key])).filter(Number.isFinite);
   if (!values.length) return `<p class="no-results">${esc(empty)}</p>`;
   const g = geometry(type === 'bar' ? [...values, ...references.map(item => item.value)] : values, w, h, [markers.length ? 30 : 12, 8, 30, 0], scale, type === 'bar');
@@ -157,7 +159,7 @@ export function timeSeriesChart({ points, series, title, format, label, width = 
     return `${series.length === 1 && points.length > 1 && values.every(Number.isFinite) ? `<path d="${path} L${x(points.length - 1)},${baseline} L${x(0)},${baseline} Z" fill="${item.color}" fill-opacity=".08"/>` : ''}<path data-chart-series="${index}" d="${path}" stroke="${item.color}" stroke-width="2.5" fill="none"${item.dashed ? ' stroke-dasharray="6 5"' : ''} stroke-linejoin="round" vector-effect="non-scaling-stroke"/>${points.map((point, i) => !Number.isFinite(point[item.key]) ? '' : `<circle data-chart-series="${index}" cx="${x(i)}" cy="${g.y(point[item.key])}" r="${points.length > 40 ? 2 : 3.5}" fill="var(--bg-1)" stroke="${item.color}" stroke-width="2"/>`).join('')}`;
   }).join('');
   svg += points.map((point, i) => i % stride === 0 || i === points.length - 1 ? `<text x="${x(i)}" y="${h - 10}" text-anchor="${i === 0 ? 'start' : i === points.length - 1 ? 'end' : 'middle'}" fill="var(--chart-label)">${esc(label(point))}</text>` : '').join('') + '<g class="chart-selection" aria-hidden="true"></g></svg>';
-  const plot = interactivePlot(svg, { title, scale, domain: { min: g.min, max: g.max }, left: g.left, right: g.right, top: markers.length ? 30 : 12, bottom: g.bottom, points: points.map((point, i) => ({ x: x(i), period: pointPeriod(point, label(point)), details: pointDetails(point), rows: series.map((item, seriesIndex) => ({ item, seriesIndex })).filter(({ item }) => Number.isFinite(point[item.key])).map(({ item, seriesIndex }) => ({ seriesIndex, name: item.name, value: format(point[item.key]), color: item.color, x: seriesX(i, seriesIndex), y: g.y(point[item.key]) })), extra: [...references.map(item => ({ name: item.name, value: format(item.value) })), ...tooltipRows(point)] })) });
+  const plot = interactivePlot(svg, { title, scale, domain: { min: g.min, max: g.max }, left: g.left, right: g.right, top: markers.length ? 30 : 12, bottom: g.bottom, points: points.map((point, i) => ({ x: x(i), period: pointPeriod(point, label(point)), details: pointDetails(point), rows: series.map((item, seriesIndex) => ({ item, seriesIndex })).filter(({ item }) => Number.isFinite(point[item.key])).map(({ item, seriesIndex }) => ({ seriesIndex, name: item.name, value: format(point[item.key]), color: item.color, x: seriesX(i, seriesIndex), y: g.y(point[item.key]) })), extra: [...references.map(item => ({ name: item.name, value: format(item.value) })), ...tooltipRows(point)] })).filter(point => point.rows.length) });
   return `<figure class="time-series-figure"><div class="chart-legend">${series.map(item => `<span><i style="--series-color:${item.color}" class="${item.dashed ? 'dashed' : ''}"></i>${esc(item.name)}</span>`).join('')}${references.map(item => `<span><i class="dashed" style="--series-color:var(--border-strong)"></i>${esc(item.name)} ${esc(format(item.value))}${referencePosition(item)}</span>`).join('')}<span class="chart-currency">NOK</span></div>${plot}<figcaption>${esc(label(points[0]))} – ${esc(label(points.at(-1)))} · ${scaleName} scale${rangeNote}</figcaption><details class="chart-data"><summary>View chart figures</summary><div class="table-scroll"><table><caption class="sr-only">${esc(title)}</caption><thead><tr><th scope="col">Period</th>${series.map(item => `<th scope="col" class="numeric">${esc(item.name)}</th>`).join('')}</tr></thead><tbody>${points.map(point => `<tr><th scope="row">${point.starting ? 'Start · ' : ''}${esc(point.month || point.date || label(point))}${point.end && point.end !== point.date ? ` – ${esc(point.end)}` : ''}</th>${series.map(item => `<td class="numeric">${Number.isFinite(point[item.key]) ? esc(format(point[item.key])) : '—'}</td>`).join('')}</tr>`).join('')}</tbody></table></div></details></figure>`;
 }
 
@@ -165,6 +167,29 @@ export function timeSeriesChart({ points, series, title, format, label, width = 
 // Read the page control on every redraw, preserving an open figures table.
 export function renderTimeSeriesChart(container, options) {
   const expanded = container.querySelector('.chart-data')?.open;
-  container.innerHTML = timeSeriesChart({ ...options, scale: pageChartScale(container) });
+  const scale = pageChartScale(container);
+  container.innerHTML = timeSeriesChart({ ...options, scale });
   if (expanded && container.querySelector('.chart-data')) container.querySelector('.chart-data').open = true;
+  registerBlock(container, chartBlock({ ...options, scale }));
+}
+
+export function chartBlock(options) {
+  // Copy all mutable chart data while retaining application format functions.
+  const snapshot = { ...options, points: options.points.map(point => ({ ...point })), series: options.series.map(series => ({ ...series })), references: options.references?.map(item => ({ ...item })), markers: options.markers?.map(item => ({ ...item })) };
+  return {
+    title: snapshot.title,
+    initial: { scale: snapshot.scale || 'linear', type: snapshot.type || 'line', series: snapshot.series.map(item => item.key), figures: false },
+    controls: [
+      { key: 'scale', label: 'Chart scale', choices: CHART_SCALES.map(item => ({ value: item.id, label: item.label })) },
+      { key: 'type', label: 'Chart style', choices: [{ value: 'line', label: 'Lines' }, { value: 'bar', label: 'Bars' }] },
+      { key: 'series', label: 'Visible series', type: 'series', choices: snapshot.series.map(item => ({ value: item.key, label: item.name })) },
+      { key: 'figures', label: 'Show chart figures', type: 'checkbox' },
+    ],
+    render(container, settings) {
+      const series = snapshot.series.filter(item => settings.series.includes(item.key));
+      container.innerHTML = series.length ? timeSeriesChart({ ...snapshot, series, scale: settings.scale, type: settings.type, width: container.clientWidth || 960, height: 420 }) : '<p class="no-results">Select a series to show the chart.</p>';
+      const figures = container.querySelector('.chart-data');
+      if (figures) figures.open = settings.figures;
+    },
+  };
 }

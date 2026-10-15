@@ -308,3 +308,15 @@ test('time-spaced forecasts respect a partial earliest history interval', () => 
   const data = chartData(chart(points, { timeSpacing: true }));
   assert.ok(data.points[1].x - data.points[0].x < (data.points[2].x - data.points[1].x) / 20);
 });
+
+test('hiding a forecast series omits empty inspection points without joining missing chart data', () => {
+  const points = [{ date: '2026-07-01', history: 105 }, { date: '2026-08-01', net: 205 }, { date: '2026-09-01', history: 305 }];
+  const markup = chart(points, { series: [{ key: 'history', name: 'History', color: 'var(--chart-6)' }] });
+  const data = chartData(markup);
+  assert.equal(data.points.length, 2);
+  assert.ok(data.points.every(point => point.rows.length && point.rows.every(row => Number.isFinite(row.y))));
+  assert.match(markup, /<td class="numeric">—<\/td>/);
+  // The absent middle month must still break the line, rather than inventing
+  // a continuous history when only one branch of a forecast is visible.
+  assert.match(markup, /data-chart-series="0" d="M[^"]+ M/);
+});

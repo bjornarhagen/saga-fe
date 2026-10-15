@@ -1,6 +1,7 @@
 import { pageChartScale } from './page-chart-scale.js';
 import { rollingNumberMarkup, renderRollingNumbers } from './number-roll.js';
-import { sparkline } from './charts.js';
+import { sparkline, chartBlock } from './charts.js';
+import { registerBlock } from './block-dialog.js';
 
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const percent = new Intl.NumberFormat('en-GB', { maximumFractionDigits: 1 });
@@ -40,5 +41,43 @@ export function metricCardsMarkup(items, { scale = 'linear' } = {}) {
   return items.map(item => `<article class="metric" style="--stat-accent:${tones[item.tone] || tones.neutral}"><div class="metric-label"><span>${esc(item.label)}</span>${iconMarkup(item.icon || 'balance')}</div><div class="metric-value ${esc(item.color || '')}">${rollingNumberMarkup(item.value, item.label)}</div><div class="metric-note">${esc(item.note)}</div>${trendMarkup(item, scale)}${item.change ? `<div class="metric-comparison"><span class="change-badge ${esc(item.change.color || '')}">${esc(item.change.text)}</span><span>${esc(item.change.note)}</span></div>` : ''}</article>`).join('');
 }
 
-export const renderStatistics = (container, items) => renderRollingNumbers(container, statisticsMarkup(items, { scale: pageChartScale(container) }));
-export const renderMetricCards = (container, items) => renderRollingNumbers(container, metricCardsMarkup(items, { scale: pageChartScale(container) }));
+export function statisticBlock(item, scale) {
+  const snapshot = { ...item, values: item.values ? [...item.values] : [], trendPoints: item.trendPoints?.map(point => ({ ...point })) };
+  const trend = snapshot.values.length > 1 ? chartBlock({
+    title: snapshot.label,
+    scale,
+    points: snapshot.values.map((value, i) => ({ ...snapshot.trendPoints?.[i], value })),
+    series: [{ key: 'value', name: snapshot.label, color: tones[snapshot.tone] || tones.neutral }],
+    format: snapshot.trendFormat || (value => `${new Intl.NumberFormat('nb-NO', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(value / 100)} kr`),
+    label: point => point.month || point.date || '',
+  }) : null;
+  return {
+    title: snapshot.label,
+    initial: { ...trend?.initial, notes: true, trend: !!trend },
+    controls: [
+      { key: 'notes', label: 'Show explanation', type: 'checkbox' },
+      ...(trend ? [{ key: 'trend', label: 'Show trend', type: 'checkbox' }, ...trend.controls] : []),
+    ],
+    render(container, settings) {
+      container.innerHTML = `<dl class="expanded-statistic">${statisticsMarkup([{ ...snapshot, values: [] }], { scale: settings.scale })}</dl><div class="expanded-statistic-trend"></div>`;
+      container.querySelector('.stat-note').hidden = !settings.notes;
+      if (settings.notes && (snapshot.change || snapshot.trendLabel)) {
+        const note = container.ownerDocument?.createElement('p');
+        if (note) {
+          note.className = 'input-note';
+          note.textContent = [snapshot.change ? `${snapshot.change.text} ${snapshot.change.note}` : '', snapshot.trendLabel].filter(Boolean).join(' · ');
+          container.append(note);
+        }
+      }
+      if (trend && settings.trend) trend.render(container.querySelector('.expanded-statistic-trend'), settings);
+    },
+  };
+}
+
+function renderBlocks(container, items, markup, selector) {
+  const scale = pageChartScale(container);
+  renderRollingNumbers(container, markup(items, { scale }));
+  container.querySelectorAll(selector).forEach((element, index) => registerBlock(element, statisticBlock(items[index], scale)));
+}
+export const renderStatistics = (container, items) => renderBlocks(container, items, statisticsMarkup, ':scope > .stat-item');
+export const renderMetricCards = (container, items) => renderBlocks(container, items, metricCardsMarkup, ':scope > .metric');
