@@ -186,14 +186,36 @@ Regular income uses salary rows; refunds and other incoming money do not become
 recurring salary automatically.
 
 Internal transfers are excluded from consolidated income and spending. Outgoing
-rows tagged `Sparing` or `Mikrospar til …` are external savings and reduce
-available cash. Changing an account's forecast role does not reclassify its
-historical transactions.
+rows tagged `Sparing` or `Mikrospar til …` are savings and reduce available cash.
+In a transaction's review dialog, link an external sender or receiver to an
+account you own and choose Automatic classification. Available-to-available
+movements are transfers; contributions from available cash into reserves or
+investments are savings outflows. Withdrawals into available cash are money in,
+not recurring salary. Saved explicit classifications take priority. Changing a
+linked account's role updates automatic cash-boundary classification without
+rewriting source rows. A link applies only to that payment, not every payment
+to a platform's shared collection account.
 
 Monthly cash change = regular income − spending − external savings − spending
 change. The one-off expense applies in month one. Dates follow monthly
 anniversaries of the balance date, clamped to month end. All calculation amounts
 use integer øre.
+
+Accounts also have a bank/platform and a type: everyday bank, savings,
+investment, credit, or other. You can track any owned account manually without
+an export. Investment accounts stay outside available cash and savings reserves.
+Their recorded values include holdings and uninvested platform cash in one NOK
+total; the app does not price individual holdings or predict investment returns.
+
+Use **Record value** to save a dated observation. A new date adds history;
+saving the same date corrects that observation. Account settings save separately
+and never create a value observation or payment. Value history compares changes
+with recorded net movements after the previous date through the current date.
+“Other change” is the residual: it may include gains/losses, fees, interest or
+missing transactions, and is not a calculated investment return. Unknown values
+break the comparison. Charts connect known observations, not daily valuations.
+Latest-value subtotals can contain different dates; forecast starting balances
+still require aligned dates for included cash and reserve accounts.
 
 Reserve needs are cumulative at each checkpoint; do not sum them across months.
 The reserve is shown separately and is not automatically withdrawn or increased

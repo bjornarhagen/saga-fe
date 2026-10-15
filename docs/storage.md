@@ -54,10 +54,28 @@ balances are null, distinct from zero. A combined account-derived forecast is
 available only when every included account has a known balance for the same date.
 Reserve totals cannot be negative. Available accounts may be overdrawn.
 
-Historical internal transfers remain excluded from consolidated cash flow.
-Changing an account's forecast role does not rewrite transaction classifications.
-Planned transfers out of available cash into a reserve belong in the forecast's
-monthly savings assumption; the app does not schedule internal transfers.
+Schema version 5 adds `account_profiles`, with account type, institution and
+owner metadata override flags. Existing accounts migrate as `other` with their
+balances, roles, import identities and edits intact. Investment accounts must use
+`excluded`; they cannot supply forecast cash or reserves.
+
+Transaction edits can hold `fromOwnedAccountId` and `toOwnedAccountId`. These
+per-payment links preserve source endpoints and cannot replace an imported owned
+side. They do not globally claim a platform collection account. Automatic
+classification uses the effective owned accounts and their cash roles: available
+to available is a transfer; available to reserve/investment is savings; reserve
+or investment into available is nonrecurring money in. Explicit kind edits take
+priority. Changing a role changes this projection without rewriting source rows.
+Mirrored same-date, same-amount entries between the same resolved owned accounts
+are paired by occurrence across sources for movement history. Both rows remain.
+Different booked dates cannot be reliably matched and stay separate.
+
+Dated values use the existing `balance_snapshots` table. Same-date saves correct
+an observation; a new date preserves earlier history. Values never generate
+transactions. Profile-only edits never generate observations. Value history
+reports the difference beyond recorded movements, not investment performance;
+missing data, fees and interest can contribute to the residual. Investment
+returns are not forecast. The app does not schedule transfers.
 
 Owner settings and transaction corrections persist in SQLite across browsers and
 restarts. The first local launch migrates earlier browser settings when the

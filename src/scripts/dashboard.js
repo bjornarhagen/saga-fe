@@ -176,8 +176,8 @@ function renderOverview() {
   const metrics = [
     ['Money in', s.income, 'Salary and other incoming money', '', 'income'],
     ['Spending', s.expense, 'Bills, purchases & other outflows', '', 'expense'],
-    ['External savings', s.saving, 'Money moved outside this export', '', 'saving'],
-    ['Cash change', s.net, 'Money in − spending − external savings', s.net < 0 ? 'negative' : 'positive', 'net']
+    ['Savings & investments', s.saving, 'Contributions to reserves and investments', '', 'saving'],
+    ['Cash change', s.net, 'Money in − spending − savings contributions', s.net < 0 ? 'negative' : 'positive', 'net']
   ];
   renderMetricCards($('metrics'), metrics.map(([label, amount, note, color, key]) => ({ label, value: money(amount), note, color, icon: { income: 'income', expense: 'expense', saving: 'saving', net: 'trend' }[key], tone: key, values: trendPoints.map(point => point[key]), trendPoints, trendLabel: trendPoints.length > 1 ? `${grouping} totals · ${dateText(trendPoints[0].date)} – ${dateText(trendPoints.at(-1).end)}` : '', change: comparison ? { text: changeText(amount, comparison.totals[key], money), note: `from ${money(comparison.totals[key])}`, color: key === 'saving' || amount === comparison.totals[key] ? '' : (key === 'expense' ? amount < comparison.totals[key] : amount > comparison.totals[key]) ? 'positive' : 'negative' } : null })));
   $('comparison-caption').textContent = comparison ? `Compared with ${dateText(comparison.start)} – ${dateText(comparison.end)}. Arrows show the direction of change.` : $('period').value === 'all' ? 'All recorded history · no previous period comparison.' : 'Previous-period comparisons appear when the ledger covers both full date ranges.';
@@ -186,7 +186,7 @@ function renderOverview() {
     { label: 'Average daily spending', value: stats.dailySpending === null ? '—' : money(stats.dailySpending), note: stats.days ? `Across ${number.format(stats.days)} recorded calendar days` : 'No recorded date coverage' },
     { label: 'Typical spending payment', value: stats.medianPayment === null ? '—' : exactMoney(stats.medianPayment), note: `Median of ${number.format(stats.spendingPayments)} spending payments` },
     { label: 'Largest spending payment', value: largest ? money(-largest.amount) : '—', note: largest ? `${largest.description} · ${dateText(largest.date)}` : 'No spending payments', href: largest ? routeHash({ view: 'transaction', id: largest.id }) : undefined },
-    { label: 'External savings rate', value: percentage(stats.savingsRate), note: s.income > 0 ? 'External savings ÷ all money in' : 'Needs incoming money in this period' },
+    { label: 'Savings contribution rate', value: percentage(stats.savingsRate), note: s.income > 0 ? 'Savings & investments ÷ all money in' : 'Needs incoming money in this period' },
   ].map((item, i) => ({ ...item, icon: ['calendar', 'payment', 'expense', 'percent'][i], tone: ['expense', 'neutral', 'expense', 'saving'][i] })));
   $('period-insights-note').textContent = stats.days ? `Daily average uses ${dateText(stats.start)} – ${dateText(stats.end)}, including days without recorded spending. Savings and internal transfers stay out of spending statistics.` : 'Choose dates within your recorded history to see daily averages.';
   const labels = point => history.interval === 'month' ? monthText(point.date.slice(0, 7)) : dateText(point.date).replace(/ \d{4}$/, '');
@@ -251,7 +251,7 @@ function renderForecast() {
   const lowest = p ? p.points.reduce((low, point) => point.balance < low.balance ? point : low, { date: balanceDate, balance: cash }) : null;
   const impact = p ? -adjustment * state.horizon - oneOff : null;
   renderStatistics($('scenario-insights'), [
-    { label: 'Income committed', value: p ? percentage(ratio(a.expense + a.saving + adjustment, a.income)) : '—', note: p && a.income <= 0 ? 'Needs positive regular monthly income' : 'Monthly spending + external savings ÷ regular income; excludes one-off expense' },
+    { label: 'Income committed', value: p ? percentage(ratio(a.expense + a.saving + adjustment, a.income)) : '—', note: p && a.income <= 0 ? 'Needs positive regular monthly income' : 'Monthly spending + savings contributions ÷ regular income; excludes one-off expense' },
     { label: 'Scenario cash impact', value: impact === null ? '—' : money(impact), note: `Versus unchanged spending over ${state.horizon} months; includes the one-off expense`, color: impact === null || impact === 0 ? '' : impact < 0 ? 'negative' : 'positive' },
     { label: 'Lowest cash checkpoint', value: lowest ? money(lowest.balance) : '—', note: lowest ? `${dateText(lowest.date)} · includes starting cash; before reserve withdrawals` : 'Enter valid starting balances and assumptions' },
   ].map((item, i) => ({ ...item, icon: ['percent', 'trend', 'balance'][i], tone: ['expense', 'net', 'income'][i] })));
@@ -293,10 +293,10 @@ function renderTransactions() {
   renderStatistics($('transaction-statistics'), [
     { label: 'Money in', value: money(totals.income), note: 'Salary and other incoming money' },
     { label: 'Spending', value: money(totals.expense), note: 'Bills, purchases & other outflows' },
-    { label: 'External savings', value: money(totals.saving), note: 'Money moved outside this export' },
+    { label: 'Savings & investments', value: money(totals.saving), note: 'Contributions to reserves and investments' },
     { label: 'Cash change', value: money(totals.net), note: `${number.format(tx.filter(t => t.kind === 'transfer').length)} internal transfer entries excluded`, color: totals.net < 0 ? 'negative' : totals.net > 0 ? 'positive' : '' },
   ].map((item, i) => ({ ...item, icon: ['income', 'expense', 'saving', 'trend'][i], tone: ['income', 'expense', 'saving', 'net'][i], values: history.points.map(point => point[['income', 'expense', 'saving', 'net'][i]]), trendPoints: history.points })));
-  renderTimeSeriesChart($('transaction-trend-chart'), { points: tx.length ? history.points : [], series: [{ key: 'income', name: 'Money in', color: 'var(--chart-in)' }, { key: 'expense', name: 'Spending', color: 'var(--chart-out)' }, { key: 'saving', name: 'External savings', color: 'var(--chart-3)' }], title: 'Filtered transaction activity in NOK', format: exactMoney, label: point => history.interval === 'month' ? monthText(point.date.slice(0, 7)) : dateText(point.date).replace(/ \d{4}$/, ''), width: $('transaction-trend-chart').clientWidth, empty: 'No transactions match these filters.' });
+  renderTimeSeriesChart($('transaction-trend-chart'), { points: tx.length ? history.points : [], series: [{ key: 'income', name: 'Money in', color: 'var(--chart-in)' }, { key: 'expense', name: 'Spending', color: 'var(--chart-out)' }, { key: 'saving', name: 'Savings & investments', color: 'var(--chart-3)' }], title: 'Filtered transaction activity in NOK', format: exactMoney, label: point => history.interval === 'month' ? monthText(point.date.slice(0, 7)) : dateText(point.date).replace(/ \d{4}$/, ''), width: $('transaction-trend-chart').clientWidth, empty: 'No transactions match these filters.' });
   $('transaction-trend-note').textContent = `${{ day: 'Daily', week: '7-day', month: 'Monthly' }[history.interval]} totals for all matching pages. First and last periods may be partial. Internal transfers are excluded.`;
   const kindLabels = { expense: 'Spending', income: 'Money in', saving: 'Savings', transfer: 'Transfer' };
   $('transaction-rows').innerHTML = shown.length ? shown.map(t => { const node = explorer.endpointForAccount(t.accountId); return `<tr><td>${dateText(t.date)}<small>${node ? explorer.endpointLink(node) : esc(t.account || 'Unknown account')}</small></td><td><a class="ledger-link" href="${esc(routeHash({ view: 'transaction', id: t.id }))}">${esc(t.description || 'Untitled transaction')}</a>${t.review ? '<small class="review-tag">● Needs review</small>' : ''}${t.excludeForecast ? '<small>One-off · excluded from forecast</small>' : ''}</td><td>${esc(t.category)}<small>${esc(t.subcategory)}</small>${categoryControls(t)}</td><td><span class="badge ${t.kind}">${kindLabels[t.kind]}</span></td><td class="numeric ${t.amount > 0 ? 'positive' : ''}">${t.amount > 0 ? '+' : ''}${money(t.amount)}</td><td><button class="edit-button" data-edit="${esc(t.id)}" aria-label="Review ${esc(t.description)}">Edit</button></td></tr>`; }).join('') : '<tr><td colspan="6" class="no-results">No transactions match these filters.</td></tr>';
@@ -318,9 +318,16 @@ function editTransaction(id) {
   state.editId = id;
   $('edit-description').textContent = tx.description;
   $('edit-meta').textContent = `${dateText(tx.date)} · ${money(tx.amount)} · ${tx.account || 'Unknown account'}`;
-  $('edit-kind').value = tx.kind; $('edit-category').value = tx.category; $('edit-exclude').checked = !!tx.excludeForecast;
+  $('edit-kind').value = state.overrides[id]?.kind || 'auto'; $('edit-category').value = tx.category; $('edit-exclude').checked = !!tx.excludeForecast;
   // Preserve cash direction while still allowing either direction to be an internal transfer.
   for (const option of $('edit-kind').options) option.disabled = tx.amount > 0 ? ['expense', 'saving'].includes(option.value) : tx.amount < 0 ? option.value === 'income' : false;
+  for (const side of ['from', 'to']) {
+    const control = $('edit-' + side + '-owned');
+    const source = tx[side === 'from' ? 'sourceFromEndpoint' : 'sourceToEndpoint'];
+    control.innerHTML = '<option value="">Use source sender / receiver</option>' + (state.data.accountDetails || []).map(account => `<option value="${esc(account.id)}">${esc(account.name)}${account.institution ? ` · ${esc(account.institution)}` : ''}</option>`).join('');
+    control.value = source?.owned ? source.accountId : state.overrides[id]?.[`${side}OwnedAccountId`] || '';
+    control.disabled = !!source?.owned;
+  }
   categorization.renderReview(tx);
   $('edit-dialog').showModal();
 }
@@ -405,14 +412,19 @@ for (const [id, status] of [['show-uncategorized', 'uncategorized'], ['show-cate
 $('close-dialog').addEventListener('click', () => $('edit-dialog').close());
 $('edit-form').addEventListener('submit', async event => {
   event.preventDefault();
-  const override = { kind: $('edit-kind').value, category: $('edit-category').value.trim(), excludeForecast: $('edit-exclude').checked };
+  const override = { category: $('edit-category').value.trim(), excludeForecast: $('edit-exclude').checked };
+  if ($('edit-kind').value !== 'auto') override.kind = $('edit-kind').value;
+  for (const side of ['from', 'to']) {
+    const control = $('edit-' + side + '-owned');
+    if (!control.disabled && control.value) override[`${side}OwnedAccountId`] = control.value;
+  }
   if (!override.category) return;
   const anchor = state.transactions.find(t => t.id === state.editId);
   const submit = event.submitter; if (submit) submit.disabled = true;
   try {
     await api('/api/overrides', { method: 'PATCH', body: { id: state.editId, override } });
     $('edit-dialog').close(); await loadLocal(); persist(); toast('Transaction updated in your ledger.');
-    if (anchor && (override.category !== anchor.category || matchesCategoryStatus(anchor, 'pending'))) categorization.offerSimilar({ ...anchor, kind: override.kind }, override.category, 'user_applied');
+    if (anchor && (override.category !== anchor.category || matchesCategoryStatus(anchor, 'pending'))) categorization.offerSimilar(state.transactions.find(row => row.id === anchor.id) || anchor, override.category, 'user_applied');
   } catch (error) { handleError(error); }
   finally { if (submit) submit.disabled = false; }
 });

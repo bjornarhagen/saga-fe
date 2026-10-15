@@ -4,6 +4,7 @@ import { routeHash } from './routes.js';
 import { createMembershipController } from './memberships.js';
 import { renderStatistics, renderMetricCards } from './statistics.js';
 import { renderTimeSeriesChart } from './charts.js';
+import { accountTypes, accountRoles } from '../lib/account-values.js';
 
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const perPage = 40;
@@ -152,7 +153,7 @@ export function createExplorer({ api, exactMoney, dateText, getTransactions, edi
       ['Identity', esc(node.name)], ['Name source', esc(labelSources[node.labelSource] || 'Imported identity')],
       ...(node.evidence ? [['Source evidence', esc(node.evidence.reason)]] : []),
       ...(node.counterpartyName && node.counterpartyName !== node.name ? [['Counterparty label', esc(node.counterpartyName)]] : []),
-      ...(node.owned ? [['Forecast role', esc({ available: 'Available cash', reserve: 'Savings reserve', excluded: 'Excluded' }[node.role] || 'Unknown')], ['Saved balance', node.balance == null ? 'Not set' : `${exactMoney(node.balance)} as of ${esc(node.balanceDate)}`], ['Manage balance', '<a class="ledger-link" href="#accounts">Edit in Accounts →</a>']] : []),
+      ...(node.owned ? [['Bank or platform', esc(node.institution || 'Not set')], ['Account type', esc(accountTypes[node.accountType] || 'Other account')], ['Forecast role', esc(accountRoles[node.role] || 'Unknown')], ['Last recorded value', node.balance == null ? 'Not set' : `${exactMoney(node.balance)} as of ${esc(node.balanceDate)}`], ['Manage values', '<a class="ledger-link" href="#accounts">Record values and view history in Accounts →</a>']] : []),
       ['History', coverage.firstDate || summary.firstDate ? `${esc(dateText(coverage.firstDate || summary.firstDate))} – ${esc(dateText(coverage.lastDate || summary.lastDate))}` : 'No transactions'],
       ['Active payments', `${paymentsLabel(summary.payments)} · ${summary.transactionRows} ledger entries`]
     ]) + (node.balanceHistory?.length ? `<details class="source-fields"><summary>Saved balance history (${node.balanceHistory.length})</summary>${definition(node.balanceHistory.map(snapshot => [snapshot.date, snapshot.amount == null ? 'Not set' : exactMoney(snapshot.amount)]))}</details>` : '');

@@ -149,7 +149,7 @@ test('manual choices train fresh suggestions, rejections survive reimports and r
   store.ingest({ adapter: 'canonical-v1', data });
   const saved = store.exportLedger().tables; store.close(); store = createStore(path);
   assert.deepEqual(store.exportLedger().tables, saved); store.close();
-  const legacy = new DatabaseSync(path); legacy.exec('DROP TABLE transaction_category_decisions; PRAGMA user_version=3'); legacy.close();
+  const legacy = new DatabaseSync(path); legacy.exec('DROP TABLE account_profiles; DROP TABLE transaction_category_decisions; PRAGMA user_version=3'); legacy.close();
   store = createStore(path); t.after(() => store.close());
   assert.equal(store.exportLedger().databaseSchemaVersion, DATABASE_SCHEMA_VERSION);
   for (const [table, rows] of Object.entries(saved)) if (table !== 'transaction_category_decisions') assert.deepEqual(store.exportLedger().tables[table], rows);
@@ -180,7 +180,7 @@ test('a failed category migration keeps version three and every saved financial 
   t.after(() => rmSync(directory, { recursive: true, force: true }));
   const store = createStore(path); seed(store); const before = store.exportLedger().tables; store.close();
   const legacy = new DatabaseSync(path);
-  legacy.exec("DROP TABLE transaction_category_decisions; CREATE TABLE transaction_category_decisions(unexpected TEXT); INSERT INTO transaction_category_decisions VALUES('synthetic-preserved'); PRAGMA user_version=3");
+  legacy.exec("DROP TABLE account_profiles; DROP TABLE transaction_category_decisions; CREATE TABLE transaction_category_decisions(unexpected TEXT); INSERT INTO transaction_category_decisions VALUES('synthetic-preserved'); PRAGMA user_version=3");
   legacy.close();
   assert.throws(() => createStore(path), /already exists/);
   const check = new DatabaseSync(path); t.after(() => check.close());

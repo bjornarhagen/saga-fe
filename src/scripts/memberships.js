@@ -15,7 +15,7 @@ export function createMembershipController({ api, reloadLedger, notify, getRoute
   }
   function membershipNote(membership) {
     if (membership?.reviewRequired) return 'New source information conflicts with the saved decision. Review or reset the old account decision.';
-    if (membership?.status === 'owned') return 'This is one of your imported balance accounts.';
+    if (membership?.status === 'owned') return membership.provenance === 'owner-owned-account' ? 'You linked this payment to an account you own. Change this link in “Review this transaction”.' : 'The import identifies this as one of your accounts.';
     if (membership?.provenance === 'owner-other-target') return 'A different account is confirmed for this side of the payment.';
     return membership?.status === 'confirmed' ? 'Your account confirmation is saved independently of the category and payment connections.' : membership?.status === 'dismissed' ? 'The source suggestion is kept for review and excluded from this account’s active totals.' : 'Source evidence is a suggestion until you confirm this account or merchant.';
   }

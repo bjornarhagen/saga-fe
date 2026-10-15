@@ -20,7 +20,7 @@ LEDGER_TABLES = {
     "ingest_batches", "ingest_rows", "transaction_edits", "settings",
     "transaction_relations",
     "external_endpoint_refs", "transaction_account_memberships",
-    "transaction_category_decisions",
+    "transaction_category_decisions", "account_profiles",
 }
 
 
@@ -123,10 +123,11 @@ def check_exports(base, cookie, container, account_id, transaction_id, decisions
     check_export_headers(headers, "json")
     archive = json.loads(body)
     assert archive.get("format") == "saga-fe-ledger" and archive.get("formatVersion") == 1, "JSON archive is not versioned"
-    assert archive.get("databaseSchemaVersion") == 4 and archive.get("amountUnit") == "ore", "JSON archive schema or amount unit is incorrect"
+    assert archive.get("databaseSchemaVersion") == 5 and archive.get("amountUnit") == "ore", "JSON archive schema or amount unit is incorrect"
     tables = archive.get("tables", {})
     assert set(tables) == LEDGER_TABLES and all(tables.values()), "JSON archive omitted saved ledger tables or rows"
     assert tables["accounts"][0]["id"] == account_id, "account identity was lost in export"
+    assert tables["account_profiles"][0]["account_id"] == account_id, "account profile was omitted from export"
     assert tables["account_identifiers"][0]["external_id"] == "fixture-cash", "source account identifiers were omitted"
     assert sorted(row["amount"] for row in tables["balance_snapshots"]) == [105, 12345], "balance history was omitted"
     assert tables["transactions"][0]["id"] == transaction_id and tables["transactions"][0]["amount"] == -105, "transaction contents were lost"
@@ -441,10 +442,10 @@ def main():
             assert private_json(base, "/api/transactions/" + related_id, cookie)["transaction"]["category"] == "Synthetic selected category", "category decision did not persist after restart"
             check_exports(base, cookie, container, account["id"], transaction_id, decisions, memberships)
             docker("exec", container, "node", "scripts/backup.mjs", "/tmp/fixture-backup.sqlite")
-            verify = "import {DatabaseSync} from 'node:sqlite';const db=new DatabaseSync('/tmp/fixture-backup.sqlite',{readOnly:true});if(db.prepare('PRAGMA integrity_check').get().integrity_check!=='ok'||db.prepare('PRAGMA foreign_key_check').all().length||db.prepare('PRAGMA user_version').get().user_version!==4||db.prepare('SELECT count(*) AS n FROM transactions').get().n!==2||db.prepare('SELECT count(*) AS n FROM transaction_relations WHERE status=?').get('confirmed').n!==1||db.prepare('SELECT count(*) AS n FROM transaction_account_memberships').get().n!==2||db.prepare('SELECT count(*) AS n FROM external_endpoint_refs').get().n!==2||db.prepare('SELECT count(*) AS n FROM transaction_category_decisions WHERE status=?').get('user_applied').n!==1)process.exit(1);db.close();"
+            verify = "import {DatabaseSync} from 'node:sqlite';const db=new DatabaseSync('/tmp/fixture-backup.sqlite',{readOnly:true});if(db.prepare('PRAGMA integrity_check').get().integrity_check!=='ok'||db.prepare('PRAGMA foreign_key_check').all().length||db.prepare('PRAGMA user_version').get().user_version!==5||db.prepare('SELECT count(*) AS n FROM transactions').get().n!==2||db.prepare('SELECT count(*) AS n FROM transaction_relations WHERE status=?').get('confirmed').n!==1||db.prepare('SELECT count(*) AS n FROM transaction_account_memberships').get().n!==2||db.prepare('SELECT count(*) AS n FROM external_endpoint_refs').get().n!==2||db.prepare('SELECT count(*) AS n FROM transaction_category_decisions WHERE status=?').get('user_applied').n!==1)process.exit(1);db.close();"
             docker("exec", container, "node", "--input-type=module", "-e", verify)
             check_activity(base, cookie)
-        print("Restricted runtime, owner login, ingestion, persistence, schema4 exports/recovery, category decisions, account evidence/confirmation/category totals and detail APIs passed with synthetic data.")
+        print("Restricted runtime, owner login, ingestion, persistence, schema5 exports/recovery, category decisions, account evidence/confirmation/category totals and detail APIs passed with synthetic data.")
     except Exception:
         # These isolated containers contain only the synthetic fixtures above.
         for container in containers:

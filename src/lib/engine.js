@@ -66,10 +66,22 @@ export function parseExport(text) {
 export function applyOverrides(transactions, overrides = {}) {
   return transactions.map(t => {
     const o = overrides[t.id] || {};
+    const from = t.fromEndpoint, to = t.toEndpoint;
+    const ownedMovement = from?.owned && to?.owned;
+    let movementKind;
+    if (ownedMovement) {
+      // The cash boundary is separate from ownership. Investments are never cash.
+      const available = node => node.role === 'available' && node.accountType !== 'investment';
+      movementKind = available(from) === available(to) ? 'transfer' : t.amount < 0 && available(from) ? 'saving' : t.amount > 0 && available(to) ? 'income' : 'transfer';
+    }
+    const kind = o.kind || movementKind || t.kind;
     const suggestion = t.categorySuggestion;
     const applied = suggestion && ['auto_applied', 'user_applied'].includes(suggestion.status);
     const category = o.category || (applied ? suggestion.category : t.category);
-    return { ...t, ...(applied ? { category } : {}), ...o, subcategory: category !== t.category ? '' : t.subcategory, review: suggestion?.status === 'auto_applied' || (t.review && !o.kind && suggestion?.status !== 'user_applied'), regularIncome: (o.kind ? o.kind === 'income' && t.regularIncome : t.regularIncome) };
+    return { ...t, ...(applied ? { category } : {}), ...o, kind, ownedMovement: !!ownedMovement,
+      subcategory: category !== t.category ? '' : t.subcategory,
+      review: suggestion?.status === 'auto_applied' || (t.review && !o.kind && !ownedMovement && suggestion?.status !== 'user_applied'),
+      regularIncome: !ownedMovement && kind === 'income' && t.regularIncome };
   });
 }
 export function summarize(transactions) {

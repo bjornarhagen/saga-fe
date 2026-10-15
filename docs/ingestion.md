@@ -93,6 +93,11 @@ that transaction while retaining its lineage and owner edits. Use a stable
 `sourceKey` for a feed, independent of filenames. Deduplication is scoped to
 adapter/source; unrelated feeds are never silently merged by similar amounts.
 
+Accounts may also include `accountType` (`checking`, `savings`, `investment`,
+`credit`, `other`) and `institution`. New investment accounts default to the
+`excluded` forecast role. Investment accounts cannot use available or reserve
+roles. Owner type and institution edits take precedence over imported metadata.
+
 Accounts, categories and counterparties can include an existing opaque `id`
 from `GET /api/metadata` to link the same entity across different feeds. Category
 `parentExternalId` creates a hierarchy; unknown references and cycles are rejected.

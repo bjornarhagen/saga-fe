@@ -347,10 +347,19 @@ dialog label { margin-block: var(--s-5); }
 }
 
 /* Accounts and owner access use the same active theme as the ledger. */
-.accounts-grid { display: grid; gap: var(--s-5); margin-bottom: var(--s-6); }
+.accounts-grid { display: grid; align-items: start; gap: var(--s-5); margin-bottom: var(--s-6); }
 .account-summary { grid-template-columns: 1fr; }
 .account-form label { margin-top: var(--s-4); }
-.account-fields { display: grid; gap: var(--s-4); }
+.account-card { min-width: 0; }
+.account-recorded-value { font-family: var(--font-mono); font-size: clamp(20px, 2vw, 28px); margin-block: var(--s-4) var(--s-2); overflow-wrap: anywhere; }
+.account-card details { border-top: 1px solid var(--border); margin-top: var(--s-5); padding-top: var(--s-4); }
+.account-card summary { cursor: pointer; font-family: var(--font-mono); font-size: 12px; }
+.account-value-history table { min-width: 560px; }
+.account-value-history [data-value-chart] { margin-top: var(--s-4); }
+.owned-account-fields { border: 1px solid var(--border); padding: var(--s-4); margin-top: var(--s-5); min-width: 0; }
+.owned-account-fields legend { font-size: 12px; padding-inline: var(--s-2); }
+dialog { max-height: calc(100dvh - 32px); overflow-y: auto; }
+.account-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 160px), 1fr)); gap: var(--s-4); }
 .account-save-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--s-3); margin-top: var(--s-4); }
 #data-import-button { margin-block: var(--s-5) var(--s-2); }
 #ingest-history { margin-top: var(--s-5); }
@@ -363,8 +372,7 @@ input[readonly] { color: var(--fg-dim); background: var(--bg-2); }
 .login-panel #login-error { font-size: 13px; }
 @media (min-width: 640px) {
   .accounts-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .account-summary { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-  .account-fields { grid-template-columns: 1fr 1fr; }
+  .account-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (min-width: 1280px) { .accounts-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 
