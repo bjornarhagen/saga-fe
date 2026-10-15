@@ -9,3 +9,12 @@ test('forecast balances require known aligned snapshots, distinguish zero, and e
   assert.equal(accountStartingPoint(rows.map(a => a.id === 'reserve' ? { ...a, balanceDate: '2026-01-02' } : a)).ready, false);
   assert.equal(accountStartingPoint(rows.filter(a => a.id !== 'cash')).ready, false);
 });
+
+test('latest-value estimates preserve observations and keep unknown balances blocking', () => {
+  const rows = [{ id: 'daily', role: 'available', balance: 10000, balanceDate: '2026-02-01' }, { id: 'reserve', role: 'reserve', balance: 20000, balanceDate: '2026-02-02' }, { id: 'holdings', role: 'excluded', accountType: 'investment', balance: 30000, balanceDate: '2026-02-03' }];
+  const original = structuredClone(rows);
+  assert.equal(accountStartingPoint(rows).ready, false);
+  assert.deepEqual(accountStartingPoint(rows, { estimateLatest: true }), { ready: true, date: '2026-02-03', cash: 10000, savings: 20000, estimated: true });
+  assert.deepEqual(rows, original);
+  assert.equal(accountStartingPoint(rows.map(row => row.id === 'reserve' ? { ...row, balance: null } : row), { estimateLatest: true }).ready, false);
+});

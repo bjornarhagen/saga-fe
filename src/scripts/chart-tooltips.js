@@ -1,4 +1,5 @@
 import { rollingNumberMarkup, renderRollingNumbers } from './number-roll.js';
+import { chartSampleMarkup, chartSymbolMarkup } from './chart-symbols.js';
 
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const initialized = new WeakSet();
@@ -9,8 +10,8 @@ export function nearestPoint(points, x) {
 
 export function tooltipMarkup(data, index, selectedSeries = null) {
   const point = data.points[index];
-  const rows = point.rows.map((row, i) => `<div class="chart-tooltip-row ${(row.seriesIndex ?? i) === selectedSeries ? 'selected' : ''}"><dt><i style="--series-color:${esc(row.color)}"></i>${esc(row.name)}</dt><dd>${rollingNumberMarkup(row.value, `series:${row.seriesIndex ?? i}:${row.name}`)}</dd></div>`).join('');
-  const extra = point.extra?.length ? `<dl class="chart-tooltip-extra">${point.extra.map((row, i) => `<div class="chart-tooltip-row"><dt>${esc(row.name)}</dt><dd>${rollingNumberMarkup(row.value, `extra:${i}:${row.name}`)}</dd></div>`).join('')}</dl>` : '';
+  const rows = point.rows.map((row, i) => `<div class="chart-tooltip-row ${(row.seriesIndex ?? i) === selectedSeries ? 'selected' : ''}"><dt>${chartSampleMarkup(row)}${esc(row.name)}</dt><dd>${rollingNumberMarkup(row.value, `series:${row.seriesIndex ?? i}:${row.name}`)}</dd></div>`).join('');
+  const extra = point.extra?.length ? `<dl class="chart-tooltip-extra">${point.extra.map((row, i) => `<div class="chart-tooltip-row"><dt>${row.reference ? chartSampleMarkup(row, true) : ''}${esc(row.name)}</dt><dd>${rollingNumberMarkup(row.value, `extra:${i}:${row.name}`)}</dd></div>`).join('')}</dl>` : '';
   return `<p class="chart-tooltip-context">${esc(data.title)}</p><p class="chart-tooltip-period">${esc(point.period)}</p><dl>${rows}</dl>${extra}${point.details ? `<p class="chart-tooltip-note">${esc(point.details)}</p>` : ''}`;
 }
 
@@ -81,7 +82,7 @@ export function initializeChartTooltips(root = document) {
       tooltip.hidden = false;
       renderRollingNumbers(tooltip, tooltipMarkup(data, index, series), { duration: 210, reset: resetNumbers });
       const selection = chart.querySelector('.chart-selection');
-      selection.innerHTML = `<line class="chart-hover-rule" x1="${point.x}" x2="${point.x}" y1="${data.top}" y2="${data.bottom}" vector-effect="non-scaling-stroke"/>${point.rows.map(row => `<path d="M${row.x ?? point.x},${row.y} l0,0" stroke="${esc(row.color)}" stroke-width="9" stroke-linecap="round" vector-effect="non-scaling-stroke"/><path d="M${row.x ?? point.x},${row.y} l0,0" stroke="var(--bg-1)" stroke-width="4" stroke-linecap="round" vector-effect="non-scaling-stroke"/>`).join('')}`;
+      selection.innerHTML = `<line class="chart-hover-rule" x1="${point.x}" x2="${point.x}" y1="${data.top}" y2="${data.bottom}" vector-effect="non-scaling-stroke"/>${point.rows.map(row => chartSymbolMarkup({ ...row, x: row.x ?? point.x, y: row.y, radius: 4.5, strokeWidth: 2.5, opacity: 1 })).join('')}`;
     }
     tooltip.hidden = false;
     place(chart, point);

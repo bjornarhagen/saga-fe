@@ -1,10 +1,21 @@
 import { createCategorizationController, categoryControls, matchesCategoryStatus } from './categorization.js';
 import { isUncategorized } from '../lib/categorization.js';
 import { createAccountController } from './accounts.js';
+import { createSpendingPlanController } from './spending-plans.js';
+import { createFinancialViewsController } from './financial-views.js';
+import { createForecastChartControls } from './forecast-chart-controls.js';
 import { createExplorer } from './explorer.js';
 import { parseRoute, routeHash, parentView } from './routes.js';
-import { applyOverrides, summarize, baseline, project, shiftMonth } from '../lib/engine.js';
+import { applyOverrides, summarize, baseline, project, monthlyAverage, shiftMonth, forecastHistory } from '../lib/engine.js';
 import { methodForecasts, historicalCash, defaultForecastMethods } from '../lib/forecast.js';
+import { incomeTrend, applyIncomeTrend } from '../lib/income-trend.js';
+import { normalizeIncomeGrowthSettings } from '../lib/forecast-settings.js';
+import { spendingPlanForecast, spendingPlanTransactions, spendingPlanExpenseNeedsReview } from '../lib/spending-plans.js';
+import { contributionAllocation, financialProjection, accountAssetSummary } from '../lib/financial-forecast.js';
+import { cashForecastTransactions } from '../lib/cash-scope.js';
+import { forecastCombinations } from '../lib/forecast-combinations.js';
+import { forecastChartModel } from '../lib/forecast-chart-model.js';
+import { growthReview } from '../lib/organic-growth.js';
 import { periodStatistics, comparePeriods, ratio, activitySeries, automaticGrouping } from '../lib/statistics.js';
 import { renderStatistics, renderMetricCards, percentage, changeText } from './statistics.js';
 import { renderTimeSeriesChart } from './charts.js';
@@ -26,9 +37,12 @@ const monthText = (month, long = false) => new Intl.DateTimeFormat('en-GB', { mo
 const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Oslo', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
 const palette = Array.from({ length: 8 }, (_, i) => `var(--chart-${i + 1})`);
 const storageKey = 'saga-fe-local-v1';
+const defaultFinancialView = () => ({ view: 'budget', useReserve: true, assetGroups: ['cash', 'reserve', 'investments', 'other'], growthBps: 0, reserveGrowthBps: 0, assetGrowth: { reserve: { source: 'manual', coverage: null, flowKinds: {} }, investments: { source: 'manual', coverage: null, flowKinds: {} } }, reserveContribution: null, investmentContribution: null });
+const defaultForecastChart = () => ({ scopes: ['cash', 'cash-reserve-investments'], methods: ['scenario'], startingGuides: false, fundingLimits: false, points: true });
 let saved = {};
 try { saved = JSON.parse(localStorage.getItem(storageKey) || localStorage.getItem('tally-local-v1') || '{}'); } catch { /* A fresh session works without storage. */ }
-const state = { data: null, transactions: [], view: 'overview', page: 0, horizon: saved.horizon || 3, methods: saved.methods || [...defaultForecastMethods], historyMonths: saved.historyMonths ?? 3, lookback: saved.lookback || 3, overrides: saved.overrides || {}, assumptions: saved.assumptions || {}, editId: null, imported: false, scenario: saved.scenario || 'same', balanceSource: saved.balanceSource || 'manual' };
+saved = normalizeIncomeGrowthSettings(saved);
+const state = { data: null, transactions: [], view: 'overview', page: 0, horizon: saved.horizon || 3, incomeGrowth: saved.incomeGrowth ?? false, methods: saved.methods || [...defaultForecastMethods], historyMonths: saved.historyMonths ?? 3, lookback: saved.lookback || 3, overrides: saved.overrides || {}, assumptions: saved.assumptions || {}, spendingPlans: saved.spendingPlans || [], expensePlanCategories: saved.expensePlanCategories || [], financialView: { ...defaultFinancialView(), ...saved.financialView }, forecastChart: { ...defaultForecastChart(), ...saved.forecastChart }, editId: null, imported: false, scenario: saved.scenario || 'same', balanceSource: saved.balanceSource || 'manual' };
 let toastTimeout;
 function toast(message) { $('toast').textContent = message; $('toast').hidden = false; clearTimeout(toastTimeout); toastTimeout = setTimeout(() => { $('toast').hidden = true; }, 4500); }
 let loaded = false, saveTimer, pendingSettings, saveChain = Promise.resolve();
@@ -48,11 +62,17 @@ function api(path, options = {}) {
   return operation;
 }
 function currentSettings() {
-  return { fields: Object.fromEntries(['cash', 'savings', 'buffer', 'balance-date', 'adjustment', 'one-off'].map(id => [id, $(id).value])), horizon: state.horizon, methods: [...state.methods], historyMonths: state.historyMonths, lookback: state.lookback, assumptions: { ...state.assumptions }, scenario: state.scenario, balanceSource: state.balanceSource };
+  return { fields: Object.fromEntries(['cash', 'savings', 'buffer', 'balance-date', 'adjustment', 'one-off'].map(id => [id, $(id).value])), horizon: state.horizon, incomeGrowth: state.incomeGrowth, methods: [...state.methods], historyMonths: state.historyMonths, lookback: state.lookback, assumptions: { ...state.assumptions }, spendingPlans: structuredClone(state.spendingPlans), expensePlanCategories: [...state.expensePlanCategories], financialView: structuredClone(state.financialView), forecastChart: structuredClone(state.forecastChart), scenario: state.scenario, balanceSource: state.balanceSource };
 }
 function applySettings(settings) {
   if (!settings) return;
+  settings = normalizeIncomeGrowthSettings(settings);
+  state.incomeGrowth = settings.incomeGrowth ?? false;
   state.horizon = settings.horizon || 3; state.methods = settings.methods || [...defaultForecastMethods]; state.historyMonths = settings.historyMonths ?? 3; state.lookback = settings.lookback || 3; state.assumptions = settings.assumptions || {}; state.scenario = settings.scenario || 'same'; state.balanceSource = settings.balanceSource || 'manual';
+  state.spendingPlans = settings.spendingPlans || [];
+  state.expensePlanCategories = settings.expensePlanCategories || [];
+  state.financialView = { ...defaultFinancialView(), ...settings.financialView };
+  state.forecastChart = { ...defaultForecastChart(), ...settings.forecastChart };
   const defaults = { cash: '', savings: '', buffer: '', 'balance-date': today, adjustment: '0', 'one-off': '0' };
   for (const id of Object.keys(defaults)) $(id).value = settings.fields?.[id] ?? defaults[id];
 }
@@ -92,12 +112,30 @@ const categorization = createCategorizationController({ api, getTransactions: ()
 const accountController = createAccountController({ api, money, today, onChange: () => loadLocal(), onUse: () => { state.balanceSource = 'accounts'; renderForecast(); persist(); showView('forecast'); }, onError: handleError, toast,
   activityLink: account => { const node = explorer.endpointForAccount(account.id); return node ? `<p class="input-note">${explorer.endpointLink({ ...node, name: 'View payment history →' })}</p>` : ''; }
 });
+const spendingPlanController = createSpendingPlanController({
+  api: async (path, options) => {
+    if (!await flushSavedWrites()) throw new Error('Finish saving your forecast inputs before changing spending pots.');
+    return api(path, options);
+  }, money, today, onError: handleError, toast,
+  onChange: async plans => { state.spendingPlans = plans; await loadLocal(); persist(); },
+});
+const financialViews = createFinancialViewsController({ money, exactMoney, dateText,
+  onChange: patch => {
+    if (patch.horizon !== undefined) state.horizon = patch.horizon;
+    else if (patch.resetAllocation) { state.financialView.reserveContribution = null; state.financialView.investmentContribution = null; }
+    else Object.assign(state.financialView, patch);
+    renderForecast(); persist();
+  },
+  onManageAccounts: () => showView('accounts'),
+  onEditAssumptions: () => { document.querySelector('.assumptions').scrollIntoView({ block: 'start' }); $('balance-source').focus({ preventScroll: true }); },
+});
+const forecastChartControls = createForecastChartControls({ onChange: patch => { Object.assign(state.forecastChart, patch); renderForecast(); persist(); } });
 function syncAccountStartingPoint() {
   $('balance-source').value = state.balanceSource;
-  for (const id of ['cash', 'savings', 'balance-date']) $(id).readOnly = state.balanceSource === 'accounts';
-  if (state.balanceSource !== 'accounts') { $('balance-source-note').textContent = 'Combined starting balances are saved in your private ledger. Account snapshots remain unchanged.'; return true; }
-  const starting = accountController.startingPoint();
-  $('balance-source-note').textContent = starting.ready ? 'Starting point follows the included account balances. Change them in Accounts.' : starting.reason;
+  for (const id of ['cash', 'savings', 'balance-date']) $(id).readOnly = state.balanceSource !== 'manual';
+  if (state.balanceSource === 'manual') { $('balance-source-note').textContent = 'Combined starting balances are saved in your private ledger. Account snapshots remain unchanged.'; return true; }
+  const starting = accountController.startingPoint({ estimateLatest: state.balanceSource === 'latest' });
+  $('balance-source-note').textContent = starting.ready ? state.balanceSource === 'latest' ? `Estimated starting point on ${dateText(starting.date)} using each account’s latest recorded value. Earlier values are carried forward unchanged; intervening payments are not inferred. Original dates remain intact.` : 'Starting point follows matching dated account balances. Change them in Accounts.' : starting.reason;
   if (starting.ready) { $('cash').value = (starting.cash / 100).toFixed(2); $('savings').value = (starting.savings / 100).toFixed(2); $('balance-date').value = starting.date; }
   else { $('cash').value = ''; $('savings').value = ''; }
   return starting.ready;
@@ -119,6 +157,7 @@ function activateRoute(route, { scroll = true, focus = false, restore = false } 
   if (state.data && view === 'forecast') renderForecast();
   if (state.data && view === 'overview') renderOverview();
   if (state.data && view === 'transactions') renderTransactions();
+  if (state.data && view === 'accounts') accountController.redrawCharts();
   if (scroll) window.scrollTo({ top: restore ? routePositions.get(routeHash(route)) || 0 : 0, behavior: 'instant' });
   if (loaded) void explorer.openRoute(route, { focus }).then(() => {
     if (restore && ['account', 'transaction'].includes(view) && routeHash(currentRoute) === routeHash(route)) window.scrollTo({ top: routePositions.get(routeHash(route)) || 0, behavior: 'instant' });
@@ -156,7 +195,7 @@ function range() {
 function selectedTransactions() { const r = range(); return state.transactions.filter(t => t.date >= r.start && t.date <= r.end); }
 function recalculate() {
   state.transactions = applyOverrides(state.data.transactions, state.overrides);
-  state.base = state.transactions.length ? baseline(state.transactions, state.data.metadata.lastDate, state.lookback, state.data.metadata.firstDate) : { start: today.slice(0, 7), end: today.slice(0, 7), months: 0, income: 0, expense: 0, saving: 0 };
+  state.base = state.transactions.length ? baseline(cashForecastTransactions(state.transactions, state.data.accountDetails || []), state.data.metadata.lastDate, state.lookback, state.data.metadata.firstDate) : { start: today.slice(0, 7), end: today.slice(0, 7), months: 0, income: 0, expense: 0, saving: 0 };
   renderOverview(); renderForecast(); renderTransactions(); renderData();
   return loaded ? explorer.openRoute(currentRoute) : Promise.resolve(true);
 }
@@ -203,10 +242,12 @@ function renderOverview() {
   const cashPoints = cumulative.length ? [{ date: cumulative[0].date, cashChange: 0, starting: true }, ...cumulative.map(point => ({ ...point, date: point.end }))] : [];
   renderTimeSeriesChart($('cash-change-chart'), { points: tx.length ? cashPoints : [], series: [{ key: 'cashChange', name: 'Cumulative cash change', color: 'var(--chart-4)' }], title: 'Cumulative cash change in NOK', tooltipRows: point => Number.isFinite(point.net) ? [{ name: 'Cash change in this period', value: exactMoney(point.net) }] : [], format: exactMoney, label: point => point.starting ? 'Start' : dateText(point.date).replace(/ \d{4}$/, ''), width: $('cash-change-chart').clientWidth });
   renderCashflowChart(tx.length ? history.points : [], grouping, labels);
-  const b = state.base; const net = b.income - b.expense - b.saving;
-  $('outlook-title').textContent = b.months ? net < 0 ? 'Your current pace uses more cash.' : 'Your current pace leaves some room.' : 'A little more history is needed.';
-  $('outlook-copy').textContent = b.months ? `${money(Math.abs(net))} ${net < 0 ? 'less' : 'more'} available cash per month, if recent regular income and outflows continue.` : 'There are no complete months to estimate a baseline. Enter your monthly assumptions in Look ahead.';
-  $('outlook-basis').textContent = b.months ? `Based on ${monthText(b.start)}–${monthText(b.end)}. Enter your cash balance to see what that means for you.` : 'Current account balances are not included in the export.';
+  const overviewPlans = forecastPlans();
+  const b = state.spendingPlans.length ? forecastBaseline(overviewPlans) : state.base;
+  const net = b.income - b.expense - b.saving - overviewPlans.monthlyExpense;
+  $('outlook-title').textContent = !overviewPlans.ready ? 'Review your spending plans.' : b.months ? net < 0 ? 'Your current pace uses more cash.' : 'Your current pace leaves some room.' : 'A little more history is needed.';
+  $('outlook-copy').textContent = !overviewPlans.ready ? overviewPlans.plans.filter(plan => plan.reason && !plan.trackedOnly).map(plan => plan.reason).join(' ') : b.months ? `${money(Math.abs(net))} ${net < 0 ? 'less' : 'more'} available cash per month, ${overviewPlans.managedCategories.length ? `averaged over ${state.horizon} months with planned pot spending` : 'if recent regular income and outflows continue'}.` : 'There are no complete months to estimate a baseline. Enter your monthly assumptions in Look ahead.';
+  $('outlook-basis').textContent = b.months ? `Based on ${monthText(b.start)}–${monthText(b.end)}${overviewPlans.managedCategories.length ? '; spending plans replace their categories in the history estimate' : ''}. Enter your cash balance to see what that means for you.` : 'Current account balances are not included in the export.';
   const categories = Object.entries(s.categories).sort((a, b) => b[1] - a[1]);
   $('categories').innerHTML = categories.length ? categories.slice(0, 8).map(([name, amount], i) => `<button class="category-row" data-category="${esc(name)}"><div class="category-top"><span class="category-name"><i class="category-dot" style="background:${palette[i]}"></i>${esc(name)}</span><span class="category-amount">${money(amount)}<span class="category-share">${number.format(amount / s.expense * 100)}%</span></span></div><div class="bar-track"><div class="bar-fill" style="width:${amount / s.expense * 100}%;background:${palette[i]}"></div></div></button>`).join('') + (categories.length > 8 ? `<p class="input-note">${money(categories.slice(8).reduce((sum, x) => sum + x[1], 0))} in ${categories.length - 8} other categories. Explore all in Transactions.</p>` : '') : '<p class="no-results">No spending in this period.</p>';
   const merchants = Object.entries(s.merchants).sort((a, b) => b[1] - a[1]).slice(0, 6);
@@ -234,15 +275,30 @@ function forecastHistoryDate() {
   const balanceDate = $('balance-date').value;
   return balanceDate && balanceDate < latest ? balanceDate : latest;
 }
-function forecastBaseline() {
-  return baseline(state.transactions, forecastHistoryDate(), state.lookback, state.data.metadata.firstDate);
+function forecastPlans() {
+  return spendingPlanForecast({ plans: state.spendingPlans, accounts: state.data?.accountDetails || [], asOf: $('balance-date').value || state.data?.metadata.lastDate || today, horizon: state.horizon });
+}
+function forecastBaseline(plans = forecastPlans()) {
+  return baseline(spendingPlanTransactions(cashForecastTransactions(state.transactions, state.data.accountDetails || []), plans), forecastHistoryDate(), state.lookback, state.data.metadata.firstDate);
 }
 function activeAssumptions(base = forecastBaseline()) {
   return Object.fromEntries(['income', 'expense', 'saving'].map(key => [key, state.assumptions[key] ?? base[key]]));
 }
 function renderForecast() {
   const accountBalancesReady = syncAccountStartingPoint();
-  const b = forecastBaseline(), a = activeAssumptions(b);
+  const plans = forecastPlans(), b = forecastBaseline(plans), a = activeAssumptions(b);
+  const hasPotSpending = plans.managedCategories.length > 0;
+  const expenseNeedsReview = spendingPlanExpenseNeedsReview(plans, state.assumptions.expense, state.expensePlanCategories);
+  $('expense-label').textContent = hasPotSpending ? 'Ordinary spending & bills' : 'Spending & bills';
+  $('plan-expense-review').hidden = !expenseNeedsReview;
+  $('plan-expense-review-copy').textContent = `Your spending plans changed which categories are estimated separately. Review your custom monthly spending amount${hasPotSpending ? `: it must exclude ${plans.managedCategories.join(', ')}` : ': it must now include all ordinary categories'}. Choose history or explicitly confirm the amount before projecting it.`;
+  const notes = [];
+  if (hasPotSpending) notes.push(`Planned pot spending averages ${money(plans.monthlyExpense)} per month over this ${state.horizon}-month horizon. It replaces historical spending in ${plans.managedCategories.join(', ')} and is included in every projection method. Spending stops when a pot runs out unless planned transfers replenish it. Spending-change scenarios affect ordinary spending; pot schedules stay as entered.`);
+  if (state.spendingPlans.some(plan => plan.monthlySpending == null)) notes.push('Pots without a spending pace track their recorded balance only. Their categories still follow history and individual one-off exclusions.');
+  if (hasPotSpending && state.assumptions.expense !== undefined) notes.push('Custom spending is active: enter ordinary spending without the categories covered by your pot plans.');
+  if (!plans.ready) notes.push(...plans.plans.filter(plan => plan.reason && !plan.trackedOnly).map(plan => plan.reason));
+  $('forecast-spending-plans-note').textContent = notes.join(' ');
+  $('forecast-spending-plans-note').hidden = !notes.length;
   if (state.scenario === 'less' || state.scenario === 'more') $('adjustment').value = ((state.scenario === 'less' ? -1 : 1) * a.expense / 1000).toFixed(2);
   for (const key of ['income', 'expense', 'saving']) if (document.activeElement !== $(key)) $(key).value = (a[key] / 100).toFixed(2);
   $('lookback').value = String(state.lookback);
@@ -252,38 +308,89 @@ function renderForecast() {
   $('forecast-horizon').value = String(state.horizon);
   $('forecast-history').value = String(state.historyMonths);
   document.querySelectorAll('[data-scenario]').forEach(el => { const active = el.dataset.scenario === state.scenario; el.classList.toggle('selected', active); el.setAttribute('aria-pressed', String(active)); });
-  const invalid = !accountBalancesReady || [cash ?? 0, savings, buffer, adjustment, oneOff, ...Object.values(a)].some(n => !Number.isFinite(n)) || !/^\d{4}-\d{2}-\d{2}$/.test(balanceDate) || a.expense + adjustment < 0 || (!b.months && ['income', 'expense', 'saving'].some(key => state.assumptions[key] === undefined));
-  const p = !invalid ? project({ cash, savings, buffer, ...a, adjustment, oneOff, horizon: state.horizon, asOf: balanceDate }) : null;
+  const invalidAmounts = [cash ?? 0, savings, buffer, adjustment, oneOff, ...Object.values(a)].some(n => !Number.isSafeInteger(n));
+  const cashTransactions = cashForecastTransactions(state.transactions, state.data.accountDetails || []);
+  const trend = incomeTrend({ transactions: cashTransactions, firstDate: state.data.metadata.firstDate, historyAsOf: forecastHistoryDate(), asOf: balanceDate, horizon: state.horizon });
+  const baseFlows = Array.from({ length: state.horizon }, () => ({ ...a }));
+  const grownIncome = applyIncomeTrend({ flows: baseFlows, trend, enabled: state.incomeGrowth });
+  const incomeGrowthError = grownIncome.ready ? '' : grownIncome.reason;
+  const meanIncome = grownIncome.ready && grownIncome.flows.every(flow => Number.isSafeInteger(flow.income)) ? monthlyAverage(grownIncome.flows.reduce((sum, flow) => sum + BigInt(flow.income), 0n), state.horizon) : null;
+  let monthlyCashChange = null;
+  if (grownIncome.ready && plans.ready && !invalidAmounts) {
+    try { monthlyCashChange = monthlyAverage(grownIncome.flows.reduce((sum, flow, index) => sum + BigInt(flow.income) - BigInt(flow.expense) - BigInt(flow.saving) - BigInt(adjustment) - BigInt(hasPotSpending ? plans.expenses[index] : 0), 0n), state.horizon); }
+    catch (error) { if (!(error instanceof RangeError)) throw error; }
+  }
+  const incomeRange = state.incomeGrowth && grownIncome.ready ? { first: grownIncome.flows[0].income, last: grownIncome.flows.at(-1).income } : null;
+  const invalid = !accountBalancesReady || !plans.ready || expenseNeedsReview || invalidAmounts || !!incomeGrowthError || !/^\d{4}-\d{2}-\d{2}$/.test(balanceDate) || a.expense + adjustment < 0 || (!b.months && ['income', 'expense', 'saving'].some(key => state.assumptions[key] === undefined));
+  let p = null, projectionError = incomeGrowthError;
+  if (!invalid) {
+    try { p = project({ cash, savings, buffer, ...a, adjustment, oneOff, horizon: state.horizon, asOf: balanceDate, monthlyFlows: state.incomeGrowth ? grownIncome.flows : undefined, plannedExpenses: hasPotSpending ? plans.expenses : state.incomeGrowth ? Array(state.horizon).fill(0) : undefined }); }
+    catch (error) { if (!(error instanceof RangeError)) throw error; projectionError = error.message; }
+  }
   state.projection = p;
-  const methods = methodForecasts({ transactions: state.transactions, firstDate: state.data.metadata.firstDate, historyAsOf: forecastHistoryDate(), lookback: state.lookback, assumptions: a, cash: p ? cash : null, savings, buffer, adjustment, oneOff, horizon: state.horizon, asOf: balanceDate });
+  const methods = methodForecasts({ transactions: spendingPlanTransactions(cashTransactions, plans), incomeGrowth: state.incomeGrowth, trend, plannedExpenses: hasPotSpending ? plans.expenses : undefined, firstDate: state.data.metadata.firstDate, historyAsOf: forecastHistoryDate(), lookback: state.lookback, assumptions: a, cash: p ? cash : null, savings, buffer, adjustment, oneOff, horizon: state.horizon, asOf: balanceDate });
+  $('income-growth').checked = state.incomeGrowth;
+  $('income-growth').disabled = !trend.ready && !state.incomeGrowth;
+  const preview = applyIncomeTrend({ flows: baseFlows, trend, enabled: true });
+  $('income-trend-note').textContent = trend.ready ? `Based on ${trend.completeMonths} complete months (${monthText(trend.start)}–${monthText(trend.end)}) and ${trend.matchedPairs} matching calendar-month comparisons. The learned trend gradually softens and adjusts each method’s own income estimate proportionally. Spending and contribution estimates stay with each method.${preview.ready ? ` Your scenario’s monthly income ${state.incomeGrowth ? 'runs' : 'would run'} from ${exactMoney(preview.flows[0].income)} in month 1 to ${exactMoney(preview.flows.at(-1).income)} in month ${state.horizon}.` : ''} Reimbursements included in salary can affect the estimate.` : trend.reason;
+  const monthlyReady = plans.ready && !expenseNeedsReview && !incomeGrowthError && [meanIncome, ...Object.values(a), adjustment, plans.monthlyExpense].every(Number.isSafeInteger) && a.expense + adjustment >= 0 && (b.months > 0 || ['income', 'expense', 'saving'].every(key => state.assumptions[key] !== undefined));
+  const financialContext = renderFinancialViews({ p, a: { ...a, income: meanIncome }, monthlyCashChange, incomeRange, b, plans, cashTransactions, monthlyReady, cash, savings, buffer, adjustment, oneOff, balanceDate, error: projectionError || (expenseNeedsReview ? 'Review your custom monthly spending after changing spending pots.' : !accountBalancesReady ? $('balance-source-note').textContent : invalid ? 'Enter valid starting balances, dates, and monthly assumptions below.' : cash === null ? 'Enter a starting cash balance to project cash and reserves.' : '') });
   renderForecastMethods(methods);
   const comparisons = methods.filter(method => state.methods.includes(method.id) && method.projection);
   const paths = p ? [{ id: 'balance', name: 'Your scenario', color: 'var(--chart-4)', projection: p }, ...comparisons] : [];
   $('forecast-history-note').textContent = b.months ? `History: ${monthText(b.start)}–${monthText(b.end)} · ${b.months} complete months. Historical methods use their own estimates; manual monthly inputs affect your scenario and unchanged assumptions. The spending change and one-off apply to all except unchanged assumptions.` : 'No complete history at this balance date. Enter all three monthly assumptions to use your scenario and unchanged assumptions.';
-  if (p) renderForecastChart(cash, paths, buffer, balanceDate);
-  else { $('forecast-chart-history-note').textContent = ''; $('forecast-chart').innerHTML = `<div class="empty-state"><div class="empty-state-icon" aria-hidden="true">↗</div><h3>${invalid ? 'Check your assumptions.' : 'Start with what you have.'}</h3><p>${invalid ? 'Enter valid balances, a balance date, and nonnegative monthly amounts. A spending change cannot reduce total spending below zero. With no complete history, set all three monthly assumptions.' : 'Enter your available cash on the left. Then explore how your recent income and spending could shape the next few months.'}</p></div>`; registerReadOnlyBlock($('forecast-chart'), 'Cash over time'); }
-  const net = a.income - a.expense - a.saving - adjustment;
+  $('forecast-history-note').textContent += state.incomeGrowth ? ' Income trend is on for every projection method.' : ' Income trend is off.';
+  renderForecastChart({ cash, savings, buffer, balanceDate, p, methods, b, cashTransactions, financialContext });
+  const net = plans.ready && !expenseNeedsReview && !invalidAmounts && !projectionError ? monthlyCashChange ?? NaN : NaN;
   renderStatistics($('forecast-stats'), [
-    ['Monthly cash change', Number.isFinite(net) ? money(net) : '—', net < 0 ? 'negative' : 'positive'],
+    [hasPotSpending || state.incomeGrowth ? 'Average monthly cash change' : 'Monthly cash change', Number.isFinite(net) ? money(net) : '—', net < 0 ? 'negative' : 'positive'],
     [`Cash after ${state.horizon} month${state.horizon === 1 ? '' : 's'}`, p ? money(p.endBalance) : '—', p?.endBalance < 0 ? 'negative' : ''],
     ['Peak reserve needed', p ? money(p.reserveNeeded) : '—', p?.reserveNeeded > 0 ? 'negative' : '']
-  ].map(([label, value, color], i) => ({ label, value, color, icon: ['trend', 'balance', 'saving'][i], tone: ['net', 'income', 'saving'][i], note: ['Regular monthly income minus planned outflows', 'Before any reserve withdrawals', 'At the lowest monthly checkpoint'][i], ...(p && i === 1 ? { values: [cash, ...p.points.map(point => point.balance)], trendPoints: [{ date: balanceDate, starting: true }, ...p.points] } : {}) })));
+  ].map(([label, value, color], i) => ({ label, value, color, icon: ['trend', 'balance', 'saving'][i], tone: ['net', 'income', 'saving'][i], note: [hasPotSpending || state.incomeGrowth ? `Average over ${state.horizon} months${hasPotSpending ? ', including finite pot spending' : ', including the income trend'}` : 'Regular monthly income minus planned outflows', 'Before any reserve withdrawals', 'At the lowest monthly checkpoint'][i], ...(p && i === 1 ? { values: [cash, ...p.points.map(point => point.balance)], trendPoints: [{ date: balanceDate, starting: true }, ...p.points] } : {}) })));
   const lowest = p ? p.points.reduce((low, point) => point.balance < low.balance ? point : low, { date: balanceDate, balance: cash }) : null;
   const impact = p ? -adjustment * state.horizon - oneOff : null;
   renderStatistics($('scenario-insights'), [
-    { label: 'Income committed', value: p ? percentage(ratio(a.expense + a.saving + adjustment, a.income)) : '—', note: p && a.income <= 0 ? 'Needs positive regular monthly income' : 'Monthly spending + savings contributions ÷ regular income; excludes one-off expense' },
+    { label: 'Income committed', value: p ? percentage(ratio(a.expense + plans.monthlyExpense + a.saving + adjustment, meanIncome)) : '—', note: p && meanIncome <= 0 ? 'Needs positive regular monthly income' : 'Average spending + savings contributions ÷ average projected income; includes pot plans, excludes month-one expense' },
     { label: 'Scenario cash impact', value: impact === null ? '—' : money(impact), note: `Versus unchanged spending over ${state.horizon} months; includes the one-off expense`, color: impact === null || impact === 0 ? '' : impact < 0 ? 'negative' : 'positive' },
     { label: 'Lowest cash checkpoint', value: lowest ? money(lowest.balance) : '—', note: lowest ? `${dateText(lowest.date)} · includes starting cash; before reserve withdrawals` : 'Enter valid starting balances and assumptions' },
   ].map((item, i) => ({ ...item, icon: ['percent', 'trend', 'balance'][i], tone: ['expense', 'net', 'income'][i] })));
   $('forecast-message').classList.toggle('warning', !!p && (p.reserveNeeded > 0 || p.monthlyNet < 0));
-  if (!p) $('forecast-message').textContent = invalid ? 'Correct the inputs above to calculate a forecast.' : 'Your balances and assumptions are saved in your private ledger. Public source and images contain no financial data.';
-  else if (p.reserveNeeded > 0) $('forecast-message').textContent = `At the lowest monthly checkpoint, you would need ${money(p.reserveNeeded)} from your reserve to maintain your ${money(buffer)} buffer. ${p.uncovered > 0 ? `Your entered reserve falls short by ${money(p.uncovered)}.` : `Your reserve could cover it, leaving ${money(Math.max(0, savings - p.reserveNeeded))}.`} ${p.breakEvenCut > 0 ? `Reducing monthly outflows by ${money(p.breakEvenCut)} would stop the ongoing cash decline.` : ''}`;
-  else if (p.monthlyNet < 0) $('forecast-message').textContent = `Your cash is decreasing by ${money(-p.monthlyNet)} per month. Your starting cash covers this ${state.horizon}-month scenario, with ${money(p.headroom)} above your chosen buffer at the end. Reducing monthly outflows by ${money(p.breakEvenCut)} would stop the ongoing cash decline.`;
-  else $('forecast-message').textContent = `This scenario ends ${money(p.headroom)} above your chosen buffer. Monthly cash ${p.monthlyNet === 0 ? 'stays level' : `grows by ${money(p.monthlyNet)}`}. This is end-of-period headroom; payment timing within the month is not modeled.`;
+  if (!p) $('forecast-message').textContent = projectionError || (expenseNeedsReview ? 'Review your custom spending amount above before calculating this scenario.' : invalid ? 'Correct the inputs above to calculate a forecast.' : 'Your balances and assumptions are saved in your private ledger. Public source and images contain no financial data.');
+  else if (p.reserveNeeded > 0) $('forecast-message').textContent = `Before reserve support, the cash path reaches ${money(p.reserveNeeded)} below your ${money(buffer)} buffer. The Cash & reserves view above models withdrawals, planned contributions, and the remaining reserve month by month.`;
+  else if (p.monthlyNet < 0) $('forecast-message').textContent = `This scenario averages a cash decrease of ${money(-p.monthlyNet)} per month over ${state.horizon} months. Your starting cash covers the scenario, with ${money(p.headroom)} above your chosen buffer at the end.`;
+  else $('forecast-message').textContent = `This scenario ends ${money(p.headroom)} above your chosen buffer. Average monthly cash ${p.monthlyNet === 0 ? 'stays level' : `grows by ${money(p.monthlyNet)}`}. This is end-of-period headroom; payment timing within the month is not modeled.`;
   renderForecastComparison(paths, cash, balanceDate);
   $('forecast-table').innerHTML = p ? `<div class="table-scroll"><table><caption class="sr-only">Monthly cash projections by method</caption><thead><tr><th scope="col">Date</th>${paths.map(path => `<th scope="col" class="numeric">${esc(path.name)}</th>`).join('')}<th scope="col" class="numeric">Scenario cash change</th><th scope="col" class="numeric">Scenario reserve needed</th></tr></thead><tbody>${p.points.map((point, i) => `<tr><th scope="row">${dateText(point.date)}</th>${paths.map(path => `<td class="numeric ${path.projection.points[i].balance < 0 ? 'negative' : ''}">${exactMoney(path.projection.points[i].balance)}</td>`).join('')}<td class="numeric">${exactMoney(point.cashChange)}</td><td class="numeric">${exactMoney(point.reserveNeeded)}</td></tr>`).join('')}</tbody></table></div><p class="input-note">Cash before drawing from savings. Reserve needed is cumulative to restore the buffer at each date. Negative cash shows a shortfall. Do not add reserve-needed rows together.</p>` : '<p class="no-results">Your monthly estimates will appear once your starting balance is entered.</p>';
   registerReadOnlyBlock($('forecast-comparison'), 'Compare outcomes');
   registerReadOnlyBlock($('forecast-table'), 'Month by month');
+}
+function renderFinancialViews({ p, a, monthlyCashChange, incomeRange, b, plans, cashTransactions, monthlyReady, cash, savings, buffer, adjustment, oneOff, balanceDate, error }) {
+  const accounts = state.data.accountDetails || [];
+  const reviews = Object.fromEntries(['reserve', 'investments'].map(group => [group, growthReview({ accounts: accounts.filter(account => group === 'investments' ? account.accountType === 'investment' : account.accountType !== 'investment' && account.role === 'reserve'), flows: state.data.growthFlows || [], options: state.financialView.assetGrowth?.[group], asOf: /^\d{4}-\d{2}-\d{2}$/.test(balanceDate) ? balanceDate : undefined, minimumDays: 365 })]));
+  const effectiveGrowth = Object.fromEntries(['reserve', 'investments'].map(group => [group, state.financialView.assetGrowth?.[group]?.source === 'history' ? reviews[group].evidence.annualGrowthBps ?? 0 : (group === 'reserve' ? state.financialView.reserveGrowthBps : state.financialView.growthBps) || 0]));
+  let totals, summaryError = '';
+  try { totals = accountAssetSummary(accounts); }
+  catch (error) {
+    if (!(error instanceof RangeError)) throw error;
+    summaryError = error.message;
+    totals = { ...Object.fromEntries(['cash', 'reserve', 'investments', 'other'].map(key => [key, { total: null }])), total: null, missing: 0 };
+  }
+  const automatic = contributionAllocation({ transactions: cashTransactions, accounts, start: b.start, end: b.end, months: b.months, saving: Number.isSafeInteger(a.saving) && a.saving >= 0 ? a.saving : 0 });
+  const allocation = { reserve: state.financialView.reserveContribution ?? automatic.reserve, investment: state.financialView.investmentContribution ?? automatic.investment };
+  allocation.unallocated = a.saving - allocation.reserve - allocation.investment;
+  let projection = null, forecastError = summaryError || error;
+  if (p && !summaryError) {
+    try { projection = financialProjection({ projection: p, cash, reserve: savings, investments: totals.investments.total, other: totals.other.total, buffer, asOf: balanceDate, useReserve: state.financialView.useReserve, reserveContribution: allocation.reserve, investmentContribution: allocation.investment, annualGrowthBps: effectiveGrowth.investments, annualReserveGrowthBps: effectiveGrowth.reserve }); }
+    catch (error) { if (!(error instanceof RangeError)) throw error; forecastError = error.message; }
+  }
+  const groupKeys = ['cash', 'reserve', 'investments', 'other'];
+  const dates = [...new Set(accounts.filter(account => account.balance !== null && account.balanceDate).map(account => account.balanceDate))].sort();
+  financialViews.setData({ ...state.financialView, incomeGrowth: state.incomeGrowth, incomeRange, monthlyCashChange, growthReview: reviews, effectiveGrowth, allocation, customAllocation: state.financialView.reserveContribution !== null || state.financialView.investmentContribution !== null,
+    assumptions: { ...a, adjustment, plannedMonthlyExpense: plans.monthlyExpense, oneOff },
+    summary: { ...Object.fromEntries(groupKeys.map(key => [key, totals[key].total])), total: totals.total, accounts, dates, missing: totals.missing, groupStatus: Object.fromEntries(groupKeys.map(key => [key, totals[key]])) },
+    projection, forecastError, asOf: balanceDate, horizon: state.horizon, estimateLatest: state.balanceSource === 'latest', manualStartingPoint: state.balanceSource === 'manual', monthlyReady,
+  });
+  return { accounts, totals, allocation, summaryError, forecastError, effectiveGrowth };
 }
 function renderForecastMethods(methods) {
   const container = $('forecast-method-options');
@@ -304,11 +411,52 @@ function renderForecastComparison(paths, cash, balanceDate) {
     return `<tr><th scope="row">${esc(path.name)}</th><td class="numeric ${projection.endBalance < 0 ? 'negative' : ''}">${exactMoney(projection.endBalance)}</td><td class="numeric">${exactMoney(projection.endBalance - paths[0].projection.endBalance)}</td><td class="numeric">${exactMoney(lowest.balance)}<small>${dateText(lowest.date)}</small></td><td class="numeric">${exactMoney(projection.reserveNeeded)}</td></tr>`;
   }).join('')}</tbody></table></div><p class="input-note">*Includes starting cash and monthly checkpoints. Summary cards and scenario insights describe your scenario. Each method uses the same starting cash, reserve, buffer, and horizon. Methods can overlap on the chart.</p>` : '<p class="no-results">Enter valid starting balances and assumptions to compare outcomes.</p>';
 }
-function renderForecastChart(cash, paths, buffer, balanceDate) {
-  const history = historicalCash({ transactions: state.transactions, firstDate: state.data.metadata.firstDate, lastDate: state.data.metadata.lastDate, cash, asOf: balanceDate, months: state.historyMonths });
-  $('forecast-chart-history-note').textContent = !state.historyMonths ? 'Showing future projections only.' : history.length ? `History is reconstructed from recorded cash movements, anchored to your starting cash on ${dateText(balanceDate)}. It includes one-offs and other incoming money; it is not a record of observed bank balances.${state.data.metadata.lastDate < balanceDate ? ' The latest transactions predate your balance; missing movements can affect the reconstruction.' : ''}` : 'No recorded history before this balance date in the selected chart window.';
-  const points = [...history, { date: balanceDate, starting: true, ...(history.length ? { history: cash } : {}), ...Object.fromEntries(paths.map(path => [path.id, cash])) }, ...paths[0].projection.points.map((point, i) => ({ date: point.date, ...Object.fromEntries(paths.map(path => [path.id, path.projection.points[i].balance])) }))];
-  renderTimeSeriesChart($('forecast-chart'), { points, series: [...(history.length ? [{ key: 'history', name: 'Reconstructed cash history', color: 'var(--chart-6)' }] : []), ...paths.map(path => ({ key: path.id, name: path.name, color: path.color, dashed: path.dashed }))], markers: [{ index: history.length, name: 'Forecast starts' }], timeSpacing: true, references: [{ name: 'Cash buffer', value: buffer }], title: 'Cash forecast comparison by projection method', format: exactMoney, label: point => dateText(point.date), width: $('forecast-chart').clientWidth });
+function renderForecastChart({ cash, savings, buffer, balanceDate, p, methods, b, cashTransactions, financialContext }) {
+  const settings = state.forecastChart;
+  const sourcePaths = [{ id: 'scenario', name: 'Your scenario', projection: p, reason: p ? '' : financialContext.forecastError }, ...methods];
+  const chartNotes = state.incomeGrowth ? ['Income trend is on for every projection method, including your scenario and unchanged assumptions. It adjusts each method’s income proportionally; spending and contribution estimates are preserved.'] : [];
+  const financialPaths = sourcePaths.filter(path => settings.methods.includes(path.id)).map(path => {
+    if (!path.projection) return { ...path, projection: null, reason: path.reason || 'Complete the starting balances and monthly assumptions to project this method.' };
+    try {
+      const history = forecastHistory(cashTransactions, forecastHistoryDate(), path.id === 'seasonal' ? 12 : state.lookback, state.data.metadata.firstDate);
+      const allocations = path.projection.points.map(point => ['scenario', 'unchanged'].includes(path.id) ? financialContext.allocation : contributionAllocation({ transactions: cashTransactions, accounts: financialContext.accounts, start: history.start, end: history.end, months: history.series.length, saving: point.saving }));
+      const projection = financialProjection({ projection: path.projection, cash, reserve: savings, investments: financialContext.totals.investments.total ?? 0, other: 0, buffer, asOf: balanceDate, useReserve: false, reserveContribution: allocations.map(row => row.reserve), investmentContribution: allocations.map(row => row.investment), annualGrowthBps: financialContext.effectiveGrowth.investments, annualReserveGrowthBps: financialContext.effectiveGrowth.reserve });
+      return { id: path.id, name: path.name, projection };
+    } catch (error) {
+      if (!(error instanceof RangeError)) throw error;
+      try {
+        const projection = financialProjection({ projection: path.projection, cash, reserve: 0, investments: 0, other: 0, buffer, asOf: balanceDate, useReserve: false });
+        chartNotes.push(`${path.name}: cash remains available; review the asset allocation (${error.message}).`);
+        return { id: path.id, name: path.name, projection, scopeReasons: Object.fromEntries(['reserve', 'investments', 'cash-reserve', 'cash-investments', 'cash-reserve-investments'].map(scope => [scope, error.message])) };
+      } catch (cashError) {
+        if (!(cashError instanceof RangeError)) throw cashError;
+        return { id: path.id, name: path.name, projection: null, reason: cashError.message };
+      }
+    }
+  });
+  try {
+    const start = new Date(balanceDate + 'T12:00:00Z');
+    const targetMonth = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth() - state.historyMonths, 1));
+    const lastDay = new Date(Date.UTC(targetMonth.getUTCFullYear(), targetMonth.getUTCMonth() + 1, 0)).getUTCDate();
+    targetMonth.setUTCDate(Math.min(start.getUTCDate(), lastDay));
+    const historyStart = targetMonth.toISOString().slice(0, 10);
+    const reconstructedCash = historicalCash({ transactions: cashTransactions, firstDate: state.data.metadata.firstDate, lastDate: state.data.metadata.lastDate, cash, asOf: balanceDate, months: state.historyMonths });
+    const combinations = forecastCombinations({ accounts: financialContext.accounts, asOf: balanceDate, historyStart, reconstructedCash, paths: financialPaths, scopes: settings.scopes, startMode: state.balanceSource === 'latest' ? 'latest' : state.balanceSource === 'manual' ? 'manual' : 'observed' });
+    const investmentGroup = financialContext.totals.investments;
+    const investmentFundingKnown = !financialContext.summaryError && !investmentGroup.missing && !investmentGroup.undated && (state.balanceSource === 'latest' || !investmentGroup.count || (investmentGroup.dates?.length === 1 && investmentGroup.dates[0] === balanceDate));
+    const model = forecastChartModel({ combinations, settings, asOf: balanceDate, buffer, openingReserve: savings, openingInvestments: investmentFundingKnown ? investmentGroup.total : null });
+    const width = $('forecast-chart').clientWidth;
+    renderTimeSeriesChart($('forecast-chart'), { ...model, title: 'Account combinations and forecast methods', format: exactMoney, label: point => dateText(point.date), timeSpacing: true, width, height: width < 600 ? 440 : 560, empty: 'No complete history or valid projections for the selected layers. Review their account coverage and starting balances.' });
+    chartNotes.push(...model.notes);
+    forecastChartControls.setData({ settings, methods, seriesCount: model.series.length, notes: [...new Set(chartNotes)] });
+    $('forecast-chart-history-note').textContent = `${state.historyMonths ? 'Square history markers show complete same-date observations; dotted cash history is reconstructed. Unknown values leave gaps, and investment history is never inferred.' : 'Future projections and their starting values only.'} ${state.balanceSource === 'latest' ? 'Projected starts use your latest-value estimate, preserving the original observation dates.' : state.balanceSource === 'manual' ? 'Projected cash and savings start from your entered totals.' : 'Projected starts use matching dated observations.'} Cash paths are before reserve transfers; contributions enter their allocated groups once.`;
+  } catch (error) {
+    if (!(error instanceof RangeError)) throw error;
+    $('forecast-chart').innerHTML = `<p class="no-results">${esc(error.message)}</p>`;
+    $('forecast-chart-history-note').textContent = '';
+    forecastChartControls.setData({ settings, methods, seriesCount: 0, notes: [error.message] });
+    registerReadOnlyBlock($('forecast-chart'), 'Funds over time');
+  }
 }
 
 function filteredTransactions() {
@@ -399,6 +547,7 @@ async function loadLocal() {
   if (directory) explorer.setEndpoints(directory); else explorer.directoryError();
   if (decisions) explorer.setDecisions(decisions, decisionReadVersion); else explorer.decisionError(decisionReadVersion);
   accountController.setData(payload.accountDetails || []);
+  spendingPlanController.setData({ plans: state.spendingPlans, accounts: payload.accountDetails || [], categories: [...new Set(applyOverrides(payload.transactions, payload.overrides).map(tx => tx.category))] });
   loaded = true; const detailReady = await initializeData();
   try {
     const history = await api('/api/ingest');
@@ -440,6 +589,7 @@ $('overview-scale').addEventListener('change', () => renderOverview());
 $('forecast-history').addEventListener('change', () => { state.historyMonths = Number($('forecast-history').value); renderForecast(); persist(); });
 $('forecast-horizon').addEventListener('change', () => { state.horizon = Number($('forecast-horizon').value); renderForecast(); persist(); });
 $('open-forecast-methods').addEventListener('click', () => $('forecast-method-dialog').showModal());
+$('income-growth').addEventListener('change', event => { state.incomeGrowth = event.target.checked; renderForecast(); persist(); });
 $('forecast-method-options').addEventListener('change', event => {
   const method = event.target.dataset.forecastMethod;
   if (!method) return;
@@ -455,10 +605,13 @@ $('previous-page').addEventListener('click', () => { state.page--; renderTransac
 $('next-page').addEventListener('click', () => { state.page++; renderTransactions(); });
 $('review-button').addEventListener('click', () => { clearFilters(); $('review-only').checked = true; $('transaction-period').value = 'all'; renderTransactions(); showView('transactions'); });
 $('large-payments').addEventListener('click', () => { clearFilters(); $('transaction-period').value = 'selected'; $('kind-filter').value = 'expense'; $('transaction-sort').value = 'outflow'; $('period').value = String(state.lookback); renderOverview(); renderTransactions(); showView('transactions'); });
+$('manage-spending-plans').addEventListener('click', () => { showView('accounts'); $('spending-plans').scrollIntoView({ block: 'start' }); });
 for (const id of ['cash', 'savings', 'buffer', 'balance-date', 'adjustment', 'one-off']) $(id).addEventListener('input', () => { if (id === 'adjustment') state.scenario = 'custom'; renderForecast(); persist(); });
-for (const id of ['income', 'expense', 'saving']) $(id).addEventListener('input', () => { state.assumptions[id] = fieldCents(id); if (id === 'expense') state.scenario = 'custom'; renderForecast(); persist(); });
+for (const id of ['income', 'expense', 'saving']) $(id).addEventListener('input', () => { state.assumptions[id] = fieldCents(id); if (id === 'expense') { state.scenario = 'custom'; state.expensePlanCategories = [...forecastPlans().managedCategories]; } renderForecast(); persist(); });
 $('lookback').addEventListener('change', () => { state.lookback = Number($('lookback').value); state.assumptions = {}; recalculate(); persist(); });
-$('reset-baseline').addEventListener('click', () => { state.assumptions = {}; $('adjustment').value = '0'; state.scenario = 'same'; renderForecast(); persist(); toast('Monthly assumptions restored from your history.'); });
+$('reset-baseline').addEventListener('click', () => { state.assumptions = {}; state.expensePlanCategories = []; $('adjustment').value = '0'; state.scenario = 'same'; renderForecast(); persist(); toast('Monthly assumptions restored from your history.'); });
+$('reset-plan-expense').addEventListener('click', async () => { delete state.assumptions.expense; state.expensePlanCategories = []; renderForecast(); persist(); await flushSavedWrites(); });
+$('confirm-plan-expense').addEventListener('click', async () => { state.expensePlanCategories = [...forecastPlans().managedCategories]; renderForecast(); persist(); await flushSavedWrites(); });
 for (const [id, status] of [['show-uncategorized', 'uncategorized'], ['show-category-review', 'pending']]) $(id).addEventListener('click', () => { clearFilters(); $('transaction-period').value = 'all'; $('category-status-filter').value = status; renderTransactions(); });
 $('close-dialog').addEventListener('click', () => $('edit-dialog').close());
 $('edit-form').addEventListener('submit', async event => {
@@ -525,7 +678,7 @@ $('clear-saved').addEventListener('click', async () => {
   if (!confirm('Reset forecast settings and transaction edits? Transactions and account balances remain in the ledger.')) return;
   try {
     state.overrides = (await api('/api/overrides', { method: 'PUT', body: { overrides: {}, resetCategories: true } })).overrides;
-    state.assumptions = {}; state.lookback = 3; state.horizon = 3; state.methods = [...defaultForecastMethods]; state.historyMonths = 3; state.scenario = 'same'; state.balanceSource = 'manual';
+    state.assumptions = {}; state.incomeGrowth = false; state.spendingPlans = []; state.expensePlanCategories = []; state.financialView = defaultFinancialView(); state.forecastChart = defaultForecastChart(); state.lookback = 3; state.horizon = 3; state.methods = [...defaultForecastMethods]; state.historyMonths = 3; state.scenario = 'same'; state.balanceSource = 'manual';
     for (const id of ['cash', 'savings', 'buffer']) $(id).value = '';
     $('adjustment').value = '0'; $('one-off').value = '0'; $('balance-date').value = today;
     await loadLocal(); persist(); toast('Forecast settings and transaction edits reset.');
@@ -547,7 +700,7 @@ if (!location.hash || location.hash !== routeHash(currentRoute)) history.replace
 activateRoute(currentRoute, { scroll: false });
 try { await loadLocal(); } catch (error) { handleError(error); }
 let resizeTimeout;
-window.addEventListener('resize', () => { clearTimeout(resizeTimeout); resizeTimeout = setTimeout(() => { if (!state.data) return; if (state.view === 'overview') renderOverview(); if (state.view === 'forecast') renderForecast(); if (state.view === 'transactions') renderTransactions(); if (state.view === 'account') explorer.redrawCharts(); }, 100); });
+window.addEventListener('resize', () => { clearTimeout(resizeTimeout); resizeTimeout = setTimeout(() => { if (!state.data) return; if (state.view === 'overview') renderOverview(); if (state.view === 'forecast') renderForecast(); if (state.view === 'transactions') renderTransactions(); if (state.view === 'accounts') accountController.redrawCharts(); if (state.view === 'account') explorer.redrawCharts(); }, 100); });
 $('sign-out')?.addEventListener('click', async () => {
   try { await api('/api/session', { method: 'DELETE', body: {} }); location.assign('/login'); }
   catch (error) { toast(error.message); }
@@ -560,5 +713,6 @@ window.addEventListener('saga:chartscaledefaultchange', () => {
   if (state.view === 'overview') renderOverview();
   if (state.view === 'forecast') renderForecast();
   if (state.view === 'transactions') renderTransactions();
+  if (state.view === 'accounts') accountController.redrawCharts();
   if (state.view === 'account') explorer.redrawCharts();
 });

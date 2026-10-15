@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { timeSeriesChart, renderTimeSeriesChart, sparkline } from '../src/scripts/charts.js';
+import { timeSeriesChart, renderTimeSeriesChart, sparkline, chartBlock } from '../src/scripts/charts.js';
 import { metricCardsMarkup } from '../src/scripts/statistics.js';
 import { nearestPoint, tooltipMarkup } from '../src/scripts/chart-tooltips.js';
 
@@ -54,7 +54,7 @@ test('interactive chart data retains full periods, signed exact values, counts a
   assert.equal(data.points[0].period, '1 Sept 2026 – 7 Sept 2026');
   assert.equal(data.points[0].details, '12 recorded ledger entries');
   assert.deepEqual(data.points[0].rows.map(row => row.value), ['-105 øre', '200 øre']);
-  assert.deepEqual(data.points[0].extra, [{ name: 'Buffer', value: '500 øre' }, { name: 'Difference', value: '-305 øre' }]);
+  assert.deepEqual(data.points[0].extra.map(({ name, value }) => ({ name, value })), [{ name: 'Buffer', value: '500 øre' }, { name: 'Difference', value: '-305 øre' }]);
   const output = tooltipMarkup(data, 0, 1);
   assert.match(output, /chart-tooltip-row selected/);
   assert.match(output, /-305 øre/);
@@ -236,7 +236,7 @@ test('forecast lines fit the balance range in every scale without distant buffer
     assert.match(output, /Cash buffer 500000 øre · below range/);
     assert.match(output, /Distant target 20000000 øre · above range/);
     assert.match(output, /Auto range/);
-    assert.doesNotMatch(output, /stroke-dasharray="5 5"/);
+    assert.doesNotMatch(output, /<line data-chart-reference=/);
     assert.deepEqual(data.points[0].extra.map(row => row.value), ['500000 øre', '20000000 øre']);
     assert.deepEqual(data.points.map(point => point.rows[0].value), points.map(point => `${point.net} øre`));
     for (const amount of [5000000, 6500000, 8000000, 6400000, 7800000]) assert.ok(output.includes(`<td class="numeric">${amount} øre</td>`));
@@ -281,7 +281,7 @@ test('bars keep a zero baseline while fitted line and sparkline fills stay insid
 
 test('a fitted axis keeps large, close tick amounts distinguishable', () => {
   const output = chart([{ date: '2026-01-01', net: 100000000 }, { date: '2026-02-01', net: 100000001 }]);
-  const svg = output.match(/<svg[^>]*>([\s\S]*?)<\/svg>/)[1];
+  const svg = output.match(/<svg class="time-series-svg"[^>]*>([\s\S]*?)<\/svg>/)[1];
   const labels = [...svg.matchAll(/<text[^>]*text-anchor="end"[^>]*>([^<]+)<\/text>/g)].map(match => match[1]);
   assert.ok(labels.length >= 2);
   assert.equal(new Set(labels).size, labels.length);
@@ -319,4 +319,113 @@ test('hiding a forecast series omits empty inspection points without joining mis
   // The absent middle month must still break the line, rather than inventing
   // a continuous history when only one branch of a forecast is visible.
   assert.match(markup, /data-chart-series="0" d="M[^"]+ M/);
+});
+
+test('independently dated histories can skip absent keys without inventing values or joining explicit gaps', () => {
+  const points = [{ date: '2026-01-01', net: 100 }, { date: '2026-01-08', other: 250 }, { date: '2026-01-15', net: 150 }, { date: '2026-01-22', other: 300 }, { date: '2026-02-01', net: 200 }];
+  const series = [{ key: 'net', name: 'Observed cash', color: 'var(--chart-1)', skipMissingDates: true, pointStride: 99 }, { key: 'other', name: 'Observed investments', color: 'var(--chart-2)', skipMissingDates: true }];
+  const markup = chart(points, { series, timeSpacing: true });
+  const cashPath = markup.match(/<path data-chart-series="0" d="([^"]+)"/)[1];
+  assert.equal((cashPath.match(/M/g) || []).length, 1);
+  assert.equal((cashPath.match(/L/g) || []).length, 2);
+  assert.equal((markup.match(/data-chart-series="0" data-chart-shape=/g) || []).length, 2);
+  const data = chartData(markup);
+  assert.deepEqual(data.points[1].rows.map(row => row.name), ['Observed investments']);
+  assert.deepEqual(data.points[2].rows.map(row => row.value), ['150 øre']);
+  assert.match(markup, /2026-01-08<\/th><td class="numeric">—<\/td><td class="numeric">250 øre<\/td>/);
+  const explicitGap = chart(points.map((point, i) => i === 1 ? { ...point, net: null } : point), { series });
+  const gapPath = explicitGap.match(/<path data-chart-series="0" d="([^"]+)"/)[1];
+  assert.equal((gapPath.match(/M/g) || []).length, 2);
+  assert.equal((gapPath.match(/L/g) || []).length, 1);
+  assert.equal((explicitGap.match(/data-chart-series="0" data-chart-shape=/g) || []).length, 3);
+  const defaultGap = chart(points, { series: [{ ...series[0], skipMissingDates: false }] });
+  assert.match(defaultGap, /data-chart-series="0" d="M[^"]+ M[^"]+ M/);
+});
+
+test('series symbols and line patterns remain distinct in the chart, legend and tooltip data', () => {
+  const series = ['circle', 'square', 'diamond', 'triangle'].map((shape, index) => ({ key: `scope${index}`, name: `Scope ${index + 1}`, shape, color: `var(--chart-${index + 1})`, dashArray: ['solid', 'dashed', 'dotted', 'dash-dot'][index], strokeWidth: index === 3 ? 4 : 2.5, opacity: index === 3 ? .6 : 1 }));
+  const points = [{ date: '2026-01-01', scope0: 10, scope1: 20, scope2: 30, scope3: 40 }, { date: '2026-02-01', scope0: 15, scope1: 25, scope2: 35, scope3: 45 }];
+  const markup = chart(points, { series });
+  const data = chartData(markup);
+  assert.deepEqual(data.points[0].rows.map(row => row.shape), ['circle', 'square', 'diamond', 'triangle']);
+  assert.deepEqual(data.points[0].rows.map(row => row.dashArray), ['', '6 5', '1 4', '8 4 2 4']);
+  for (const shape of ['circle', 'square', 'diamond', 'triangle']) {
+    assert.match(markup, new RegExp(`data-chart-series="\\d" data-chart-shape="${shape}"`));
+    assert.match(tooltipMarkup(data, 0), new RegExp(`data-chart-shape="${shape}"`));
+  }
+  assert.equal((markup.match(/class="chart-series-sample"/g) || []).length, 4);
+  assert.match(markup, /stroke-width="4" opacity="0.6" fill="none" stroke-dasharray="8 4 2 4"/);
+  assert.equal(data.points[0].rows[3].strokeWidth, 4);
+});
+
+test('tooltip samples match the legend after style serialization, including solid reference guides', () => {
+  const series = [{ key: 'net', name: 'Scenario', color: 'var(--chart-1)', shape: 'diamond', dashArray: 'dash-dot', strokeWidth: 3, opacity: .8 }];
+  const references = [
+    { name: 'Zero', value: 0, color: 'var(--chart-label)', dashArray: 'solid', strokeWidth: 1.5, opacity: .75 },
+    { name: 'Explicit empty solid', value: 100, dashArray: '' },
+    { name: 'Default reference', value: 200 },
+    { name: 'Starting total', value: 300, color: 'var(--chart-2)', dashArray: 'long-dash' },
+  ];
+  const markup = chart([{ date: '2026-01-01', net: 100 }], { series, references });
+  const samples = html => [...html.matchAll(/<svg class="chart-series-sample"[\s\S]*?<\/svg>/g)].map(match => match[0]);
+  const legend = samples(markup), tooltip = samples(tooltipMarkup(chartData(markup), 0));
+  assert.equal(legend.length, 5);
+  assert.deepEqual(tooltip, legend);
+  assert.doesNotMatch(tooltip[1], /stroke-dasharray/);
+  assert.doesNotMatch(tooltip[2], /stroke-dasharray/);
+  assert.match(tooltip[3], /stroke-dasharray="5 5"/);
+  assert.match(tooltip[4], /stroke-dasharray="12 5"/);
+});
+
+test('dense charts thin visible markers while keeping every exact and inspectable observation', () => {
+  const points = Array.from({ length: 61 }, (_, i) => ({ date: '2026-01-01', net: i, hidden: i * 2 }));
+  const markup = chart(points, { series: [{ key: 'net', name: 'Visible markers', color: 'var(--chart-1)', pointStride: 10, shape: 'diamond' }, { key: 'hidden', name: 'Line only', color: 'var(--chart-2)', showPoints: false }] });
+  const markers = [...markup.matchAll(/data-chart-series="0" data-chart-shape="diamond"[^>]+/g)];
+  assert.equal(markers.length, 7);
+  assert.doesNotMatch(markup, /data-chart-series="1" data-chart-shape=/);
+  assert.equal(chartData(markup).points.length, 61);
+  assert.equal(chartData(markup).points.at(-1).rows[0].value, '60 øre');
+  assert.ok((chart(points).match(/data-chart-series="0" data-chart-shape=/g) || []).length < 20);
+  const gaps = chart([{ date: '2026-01-01', net: 10 }, { date: '2026-01-02' }, { date: '2026-01-03', net: 30 }, { date: '2026-01-04', net: 40 }], { series: [{ key: 'net', name: 'Gaps', color: 'var(--chart-1)', pointStride: 99 }] });
+  assert.equal((gaps.match(/data-chart-series="0" data-chart-shape=/g) || []).length, 3);
+});
+
+test('reference levels can opt into the range and retain styled exact accessible figures', () => {
+  const points = [{ date: '2026-01-01', net: 100000 }, { date: '2026-02-01', net: 120000 }];
+  const reference = { name: 'Cash plus reserve <level>', value: -500000, color: 'var(--chart-2)', dashArray: 'dash-dot', opacity: .7, strokeWidth: 2 };
+  const excluded = chart(points, { references: [reference] });
+  const included = chart(points, { references: [{ ...reference, includeInRange: true }] });
+  assert.ok(chartData(excluded).domain.min > 0);
+  assert.ok(chartData(included).domain.min <= -500000);
+  assert.match(excluded, /below range/);
+  assert.doesNotMatch(included, /below range/);
+  assert.match(included, /data-chart-reference="Cash plus reserve &lt;level&gt;"[^>]+stroke="var\(--chart-2\)"[^>]+stroke-dasharray="8 4 2 4"/);
+  assert.match(included, /<tfoot><tr><th scope="row">Reference · Cash plus reserve &lt;level&gt;<\/th><td class="numeric" colspan="1">-500000 øre<\/td>/);
+  const extra = chartData(included).points[0].extra[0];
+  assert.equal(extra.value, '-500000 øre');
+  assert.equal(extra.reference, true);
+  assert.equal(extra.color, 'var(--chart-2)');
+  assert.match(tooltipMarkup(chartData(included), 0), /Cash plus reserve &lt;level&gt;/);
+});
+
+test('custom marker and line styles cannot inject SVG attributes or unbounded dash values', () => {
+  const output = chart([{ date: '2026-01-01', net: 10 }], { series: [{ key: 'net', name: '<img src=x>', color: 'red" onload="bad', shape: 'circle" onload="bad', dashArray: '1 2" onload="bad', strokeWidth: 999, opacity: 999 }], references: [{ name: '<script>bad</script>', value: 10, dashArray: [1000000, 2] }] });
+  assert.doesNotMatch(output, /<img|<script| onload="bad/);
+  assert.match(output, /stroke="red&quot; onload=&quot;bad"/);
+  assert.equal(chartData(output).points[0].rows[0].shape, 'circle');
+  assert.equal(chartData(output).points[0].rows[0].dashArray, '');
+  assert.equal(chartData(output).points[0].rows[0].strokeWidth, 6);
+  assert.equal(chartData(output).points[0].rows[0].opacity, 1);
+  assert.equal(chartData(output).points[0].extra[0].dashArray, '5 5');
+});
+
+test('expanded charts retain the height of a tall overview chart', () => {
+  const container = { clientWidth: 1000, innerHTML: '', querySelector: () => null };
+  const options = { points: [{ date: '2026-01-01', net: 10 }], series: [{ key: 'net', name: 'Cash', color: 'var(--chart-1)' }], title: 'Tall chart', format: String, label: point => point.date, height: 560 };
+  const block = chartBlock(options);
+  block.render(container, block.initial);
+  assert.match(container.innerHTML, /class="time-series-svg" viewBox="0 0 1000 560"/);
+  const smaller = chartBlock({ ...options, height: 250 });
+  smaller.render(container, smaller.initial);
+  assert.match(container.innerHTML, /class="time-series-svg" viewBox="0 0 1000 420"/);
 });
