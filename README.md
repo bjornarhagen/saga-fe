@@ -79,13 +79,87 @@ the import UI for subsequent exports.
 To run tests without a bank export or an existing application container:
 
 ```sh
-docker build --target development -t saga-fe:development .
-docker run --rm saga-fe:development npm test
+saga_check_image=$(docker build --quiet --target development .)
+docker run --rm "$saga_check_image" npm test
+docker run --rm "$saga_check_image" npm run build
 ```
+
+These source checks use disposable containers and do not start a web service or
+mount a ledger. Running the built image by ID avoids tag conflicts between
+parallel builds. Dependencies stay inside the image.
 
 The production image uses Astro's standalone Node adapter and Node 24. Both
 runtime targets run as an unprivileged user. Private exports and databases are
 excluded from source control and image build contexts.
+
+## Parallel previews and housekeeping
+
+Keep resources used by other active or unfinished sessions, or retained for
+user review. Port 5187 is the default application port; any free loopback port
+can be used. Ownership depends on the session and checkout, not the port or
+which checkout is primary.
+
+For parallel work, use a disposable preview from the worktree being edited:
+
+```sh
+scripts/preview.sh up
+scripts/preview.sh exec npm test
+scripts/preview.sh exec npm run build
+scripts/preview.sh status
+scripts/preview.sh down
+```
+
+The helper assigns a stable Compose project to each session and checkout, then
+prints its random loopback address. Session identity comes from `CODEX_THREAD_ID`
+or an explicit `SAGA_FE_PREVIEW_SESSION`, with a manual fallback. Use the same
+identity for all commands. Resources carry `dev.saga-fe.preview=true`,
+`dev.saga-fe.checkout`, and `dev.saga-fe.session` labels for inspection.
+To choose a free port, use `SAGA_FE_PREVIEW_PORT=5190 scripts/preview.sh up`.
+Calling the helper without arguments shows help and changes nothing. Do not run
+plain `docker compose up` from parallel worktrees: the base file's fixed
+`saga-fe` project name can replace another session's service.
+
+Preview source files are mounted read-only for live updates. The preview starts
+with an empty ledger in memory, with no bank CSV or persistent volume mounted.
+Use invented data only. **Preview data resets when the container is recreated**;
+it can also disappear when the container stops. Use the main application for
+the private ledger.
+
+Housekeeping is part of normal task work. At startup and before cleanup, agents
+check available Codex sessions, their status and checkout paths, and recent
+turns when work may be unfinished. An idle or unloaded session can still need
+its resources, and session tools may not show every provider. Match this evidence
+against Git worktree state, pushed commits, PR merge status, and Docker labels,
+mounts, and ports. If ownership remains uncertain, preserve other sessions'
+resources and clean only your own disposable resources.
+
+Run `scripts/preview.sh down` when your preview is no longer needed and is not
+kept for user review. After tests pass, changes are pushed, and the PR is merged,
+remove unused task containers, networks, and disposable dependencies. The helper
+targets the current session and checkout's preview, including its local image
+when Compose supports it. For source tests alone, use the `docker run --rm`
+commands above.
+
+For completed worktrees:
+
+1. Verify that work is pushed and its PR is merged. Check the PR directly;
+   squash merges can leave the branch outside main's Git ancestry.
+2. Check that no active or unfinished chat, running container, or pending user
+   review still needs the worktree.
+3. Remove its disposable `node_modules/`, `.astro/`, and `dist/` directories
+   promptly. They can be rebuilt in Docker.
+4. Retain the clean checkout for seven days after merge or last use, whichever
+   is later. During later normal agent work, archive it through its owning chat
+   with Codex's managed-worktree tool, which keeps a recoverable Git snapshot.
+   Do not delete active or dirty worktrees directly.
+
+Before archival, preserve any ignored private files separately. The recovery
+snapshot excludes ignored files such as imports, databases, and credentials.
+Keep ledger volumes and backups unless their deletion is explicitly authorized.
+Use targeted cleanup; do not run global Docker pruning commands.
+No unattended cleanup sweep is configured. Agents use the instructions present
+in their checkout; policy changes must reach main before new sessions from main
+can use them.
 
 ## Dashboard and appearance
 
