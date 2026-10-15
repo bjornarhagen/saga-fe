@@ -9,7 +9,7 @@ export function nearestPoint(points, x) {
 
 export function tooltipMarkup(data, index, selectedSeries = null) {
   const point = data.points[index];
-  const rows = point.rows.map((row, i) => `<div class="chart-tooltip-row ${i === selectedSeries ? 'selected' : ''}"><dt><i style="--series-color:${esc(row.color)}"></i>${esc(row.name)}</dt><dd>${rollingNumberMarkup(row.value, `series:${i}:${row.name}`)}</dd></div>`).join('');
+  const rows = point.rows.map((row, i) => `<div class="chart-tooltip-row ${(row.seriesIndex ?? i) === selectedSeries ? 'selected' : ''}"><dt><i style="--series-color:${esc(row.color)}"></i>${esc(row.name)}</dt><dd>${rollingNumberMarkup(row.value, `series:${row.seriesIndex ?? i}:${row.name}`)}</dd></div>`).join('');
   const extra = point.extra?.length ? `<dl class="chart-tooltip-extra">${point.extra.map((row, i) => `<div class="chart-tooltip-row"><dt>${esc(row.name)}</dt><dd>${rollingNumberMarkup(row.value, `extra:${i}:${row.name}`)}</dd></div>`).join('')}</dl>` : '';
   return `<p class="chart-tooltip-context">${esc(data.title)}</p><p class="chart-tooltip-period">${esc(point.period)}</p><dl>${rows}</dl>${extra}${point.details ? `<p class="chart-tooltip-note">${esc(point.details)}</p>` : ''}`;
 }

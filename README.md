@@ -91,8 +91,10 @@ excluded from source control and image build contexts.
 
 - **Overview:** period totals, monthly cash flow, spending categories, and major
   payments. Select a category or payment to inspect its transactions.
-- **Look ahead:** adjustable forecasts for the next one, two, or three months,
-  with regular income, spending, external savings, a cash buffer, and one-offs.
+- **Look ahead:** adjustable forecasts from 1 to 60 months, with up to 24 months of
+  reconstructed history on the same chart. Compare your scenario with historical
+  average, last month, exponential smoothing, seasonal repeat, and unchanged
+  assumptions, including regular income, spending, savings, a buffer, and one-offs.
 - **Transactions:** search, filter, sort, correct classifications, and exclude
   historical one-offs from forecast averages. Open any payment to see its sender,
   receiver, exact amount, source fields, saved corrections, and import history.
@@ -179,8 +181,8 @@ Account-derived starting fields follow the saved snapshots. Manual starting
 balances remain available for a separate scenario. Cash and reserves must not
 overlap, and entering a snapshot does not generate a transaction.
 
-The default baseline uses three completed calendar months before the latest
-transaction month. It excludes an incomplete initial month and the current
+The default forecast baseline uses three complete calendar months before the
+earlier of the balance month and latest transaction month. It excludes an incomplete initial month and the current
 transaction month. Choose another lookback or enter monthly assumptions.
 Regular income uses salary rows; refunds and other incoming money do not become
 recurring salary automatically.
@@ -219,9 +221,37 @@ still require aligned dates for included cash and reserve accounts.
 
 Reserve needs are cumulative at each checkpoint; do not sum them across months.
 The reserve is shown separately and is not automatically withdrawn or increased
-by planned savings. Forecasts hold monthly assumptions constant and do not model
+by planned savings. The scenario holds monthly assumptions constant; all methods omit
 paydays, bill dates, interest, taxes, investment returns, or daily liquidity.
 Review large historical payments before relying on an average.
+
+**Forecast horizon** selects 1–60 future months. **History shown** independently
+selects future only or 1, 3, 6, 12, or 24 months before the starting balance.
+The chart marks where projections begin. Historical cash is reconstructed
+backwards from the starting balance using recorded non-transfer movements,
+including nonrecurring income and excluded historical one-offs. It is not a
+series of observed bank balances. Coverage is limited to recorded history;
+missing payments and gaps before the balance date can make it incomplete.
+
+Select multiple comparison methods to show them together. Outcome and monthly
+tables retain exact øre figures, including coincident chart lines. Your scenario
+and unchanged assumptions use manual monthly inputs when set. The history
+methods estimate income, spending, and savings separately from complete months
+before the earlier of the balance month and latest transaction month:
+
+| Method | Monthly estimates |
+| --- | --- |
+| Historical average | Mean of the selected history window. |
+| Last month (naïve) | Most recent complete month. |
+| Exponential smoothing | First month initializes the level; each later month gets 30% weight and the previous level 70%, rounded to øre at each step. Requires two months. No trend is extrapolated. |
+| Seasonal repeat (seasonal naïve) | Last 12 complete months repeated by future calendar month. Requires 12 months, regardless of lookback. |
+
+The spending change and month-one expense apply to all methods except unchanged
+assumptions. Methods that would produce negative spending are unavailable.
+Incomplete initial and latest months are excluded; empty months inside covered
+history count as zero. Longer horizons magnify assumption differences. These
+projections are alternatives, not confidence intervals or probabilities.
+Horizon, history display, and comparison choices are saved with existing settings.
 
 ## Data ingestion and private storage
 

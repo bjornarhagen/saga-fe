@@ -286,3 +286,25 @@ test('a fitted axis keeps large, close tick amounts distinguishable', () => {
   assert.ok(labels.length >= 2);
   assert.equal(new Set(labels).size, labels.length);
 });
+
+test('history and future branches meet without inventing values in missing periods', () => {
+  const points = [{ date: '2026-07-15', history: 200 }, { date: '2026-08-15', history: 100, net: 100, alternate: 100, starting: true }, { date: '2026-09-15', net: -50, alternate: 150 }];
+  const series = [{ key: 'history', name: 'Recorded history', color: 'var(--chart-6)' }, { key: 'net', name: 'Scenario', color: 'var(--chart-4)' }, { key: 'alternate', name: 'Alternative', color: 'var(--chart-1)' }];
+  for (const scale of ['linear', 'sqrt', 'log']) {
+    const output = chart(points, { series, scale, markers: [{ index: 1, name: 'Forecast starts' }], timeSpacing: true });
+    const data = chartData(output);
+    assert.doesNotMatch(output, /NaN|Infinity|undefined/);
+    assert.match(output, /Forecast starts/);
+    assert.match(output, /<td class="numeric">—<\/td>/);
+    assert.deepEqual(data.points[0].rows.map(row => row.name), ['Recorded history']);
+    assert.deepEqual(data.points[2].rows.map(row => row.name), ['Scenario', 'Alternative']);
+    assert.match(tooltipMarkup(data, 2, 1), /chart-tooltip-row selected/);
+    assert.ok(data.points.every(point => point.rows.every(row => Number.isFinite(row.y))));
+  }
+});
+
+test('time-spaced forecasts respect a partial earliest history interval', () => {
+  const points = [{ date: '2026-08-14', net: 100 }, { date: '2026-08-15', net: 200 }, { date: '2026-09-15', net: 300 }];
+  const data = chartData(chart(points, { timeSpacing: true }));
+  assert.ok(data.points[1].x - data.points[0].x < (data.points[2].x - data.points[1].x) / 20);
+});
