@@ -279,7 +279,7 @@ def check_activity(base, cookie):
     assert hint["kind"] == "merchant-hint" and hint["evidence"]["isAccountIdentifier"] is False, "text merchant hint was presented as a verified account"
     numeric = next(endpoint for endpoint in directory if endpoint.get("counterpartyName") == "Synthetic activity salary")
     assert numeric["evidence"]["kind"] == "source-account-identifier" and numeric["evidence"]["requiresConfirmation"], "bank field evidence became owner confirmation"
-    assert cash["summary"] == {"incoming": 100055, "outgoing": 5210, "net": 94845, "payments": 5, "transactionRows": 6, "internalPayments": 1, "firstDate": "2026-01-01", "lastDate": "2026-01-01"}, "mirrored activity was counted incorrectly"
+    assert cash["summary"] == {"incoming": 100055, "outgoing": 5210, "net": 94845, "incomingPayments": 2, "outgoingPayments": 3, "largestPayment": 100000, "payments": 5, "transactionRows": 6, "internalPayments": 1, "firstDate": "2026-01-01", "lastDate": "2026-01-01"}, "mirrored activity was counted incorrectly"
     assert reserve["summary"]["incoming"] == 5000 and reserve["summary"]["payments"] == 1 and reserve["summary"]["transactionRows"] == 2, "recipient internal transfer was double-counted"
 
     cash_path = "/api/endpoints/" + urllib.parse.quote(cash["id"], safe="")
@@ -308,7 +308,8 @@ def check_activity(base, cookie):
     assert receiver["summary"]["incoming"] == 210 and receiver["summary"]["outgoing"] == 55 and receiver["summary"]["payments"] == 3, "external sender/receiver direction was incorrect"
     party_path = "/api/counterparties/" + urllib.parse.quote(detail["to"]["counterpartyId"], safe="")
     party = private_json(base, party_path, cookie)
-    assert party["summary"] == receiver["summary"] and len(party["transactions"]) == 3, "counterparty activity did not follow related endpoints"
+    assert receiver["summary"]["monthly"] == [{"month": "2026-01", "incoming": 210, "outgoing": 55, "payments": 3}], "endpoint monthly activity was counted incorrectly"
+    assert party["summary"] == {key: value for key, value in receiver["summary"].items() if key != "monthly"} and len(party["transactions"]) == 3, "counterparty activity did not follow related endpoints"
     for path in (cash_path, detail_path, receiver_path, party_path):
         assert all(identifier not in path for identifier in identifiers), "navigation URL contains a provider identifier"
         denied_status, denied_body, _ = request(base, path)
