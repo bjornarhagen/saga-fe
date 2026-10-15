@@ -20,6 +20,7 @@ LEDGER_TABLES = {
     "ingest_batches", "ingest_rows", "transaction_edits", "settings",
     "transaction_relations",
     "external_endpoint_refs", "transaction_account_memberships",
+    "transaction_category_decisions",
 }
 
 
@@ -122,7 +123,7 @@ def check_exports(base, cookie, container, account_id, transaction_id, decisions
     check_export_headers(headers, "json")
     archive = json.loads(body)
     assert archive.get("format") == "saga-fe-ledger" and archive.get("formatVersion") == 1, "JSON archive is not versioned"
-    assert archive.get("databaseSchemaVersion") == 3 and archive.get("amountUnit") == "ore", "JSON archive schema or amount unit is incorrect"
+    assert archive.get("databaseSchemaVersion") == 4 and archive.get("amountUnit") == "ore", "JSON archive schema or amount unit is incorrect"
     tables = archive.get("tables", {})
     assert set(tables) == LEDGER_TABLES and all(tables.values()), "JSON archive omitted saved ledger tables or rows"
     assert tables["accounts"][0]["id"] == account_id, "account identity was lost in export"
@@ -141,6 +142,8 @@ def check_exports(base, cookie, container, account_id, transaction_id, decisions
         return row["transaction_id"], row["side"], row["endpoint_id"]
     assert sorted(tables["transaction_account_memberships"], key=membership_key) == sorted(expected_memberships, key=membership_key), "account membership decisions were omitted from export"
     assert {row["id"] for row in tables["external_endpoint_refs"]} == {decision["endpointId"] for decision in memberships}, "reviewed external references were omitted from export"
+    categories = tables["transaction_category_decisions"]
+    assert len(categories) == 1 and categories[0]["category"] == "Synthetic selected category" and categories[0]["status"] == "user_applied", "category decisions were omitted from export"
     check_exports_clean(container)
     status, body, headers = request(base, "/api/export?format=sqlite", method="HEAD", cookie=cookie)
     assert status == 200 and not body, "HEAD export created a response body"
@@ -163,7 +166,7 @@ writeFileSync(path,Buffer.from(fixture.sqlite,'base64'),{flag:'wx',mode:0o600});
 const db=new DatabaseSync(path,{readOnly:true});
 try {
   if(db.prepare('PRAGMA integrity_check').get().integrity_check!=='ok'||db.prepare('PRAGMA foreign_key_check').all().length)throw new Error('Downloaded recovery integrity failed.');
-  if(db.prepare('PRAGMA user_version').get().user_version!==3)throw new Error('Downloaded recovery schema version differs.');
+  if(db.prepare('PRAGMA user_version').get().user_version!==fixture.archive.databaseSchemaVersion)throw new Error('Downloaded recovery schema version differs.');
   const actual=db.prepare("SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all().map(row=>row.name);
   const expected=Object.keys(fixture.archive.tables).sort();
   if(JSON.stringify(actual)!==JSON.stringify(expected))throw new Error('Downloaded recovery schema differs.');
@@ -186,6 +189,21 @@ def private_json(base, path, cookie, expected_status=200, method="GET", payload=
     assert headers.get("X-Content-Type-Options") == "nosniff", "private activity response omitted nosniff"
     assert "application/json" in headers.get("Content-Type", ""), "private activity API did not return JSON"
     return json.loads(body)
+
+
+def check_categories(base, cookie, transaction_id):
+    decision = {"transactionIds": [transaction_id], "category": "Synthetic selected category", "status": "user_applied"}
+    assert request(base, "/api/categories", "PATCH", decision)[0] == 401, "category decisions did not require owner login"
+    assert request(base, "/api/categories", "PATCH", decision, cookie, origin="https://untrusted.example")[0] == 403, "cross-origin category mutation was accepted"
+    before = private_json(base, "/api/export?format=json", cookie)["tables"]
+    for invalid in ({**decision, "status": "auto_applied"}, {**decision, "transactionIds": [transaction_id, "missing-fixture"]}, {**decision, "minAmount": 1.05}):
+        assert set(private_json(base, "/api/categories", cookie, 400, "PATCH", invalid)) == {"error"}, "invalid category decision was accepted"
+    assert private_json(base, "/api/export?format=json", cookie)["tables"] == before, "invalid category decisions changed saved state"
+    assert private_json(base, "/api/categories", cookie, method="PATCH", payload=decision) == {"updated": 1}, "category decision save failed"
+    detail = private_json(base, "/api/transactions/" + transaction_id, cookie)
+    assert detail["transaction"]["category"] == decision["category"] and detail["transaction"]["categorySuggestion"]["status"] == "user_applied", "user category was not projected into transaction details"
+    after = private_json(base, "/api/export?format=json", cookie)["tables"]
+    assert all(after[table] == rows for table, rows in before.items() if table != "transaction_category_decisions"), "category decision changed imported data or other saved decisions"
 
 
 def check_relations(base, cookie, transaction_id, related_id):
@@ -411,6 +429,7 @@ def main():
             assert request(base, "/api/settings", "PUT", settings, cookie)[0] == 200, "settings save failed"
             decisions = check_relations(base, cookie, transaction_id, related_id)
             memberships = check_memberships(base, cookie, transaction_id, related_id)
+            check_categories(base, cookie, related_id)
             docker("restart", "--time", "2", container)
             base = wait_healthy(container)
             status, body, _ = request(base, "/api/accounts", cookie=cookie)
@@ -419,12 +438,13 @@ def main():
             assert status == 200 and len(json.loads(body)["transactions"]) == 2, "idempotent ingest did not persist"
             assert private_json(base, "/api/relations", cookie)["decisions"] == decisions, "saved relationship decisions did not persist after restart"
             assert private_json(base, "/api/account-memberships", cookie)["decisions"] == memberships, "account membership decisions did not persist after restart"
+            assert private_json(base, "/api/transactions/" + related_id, cookie)["transaction"]["category"] == "Synthetic selected category", "category decision did not persist after restart"
             check_exports(base, cookie, container, account["id"], transaction_id, decisions, memberships)
             docker("exec", container, "node", "scripts/backup.mjs", "/tmp/fixture-backup.sqlite")
-            verify = "import {DatabaseSync} from 'node:sqlite';const db=new DatabaseSync('/tmp/fixture-backup.sqlite',{readOnly:true});if(db.prepare('PRAGMA integrity_check').get().integrity_check!=='ok'||db.prepare('PRAGMA foreign_key_check').all().length||db.prepare('PRAGMA user_version').get().user_version!==3||db.prepare('SELECT count(*) AS n FROM transactions').get().n!==2||db.prepare('SELECT count(*) AS n FROM transaction_relations WHERE status=?').get('confirmed').n!==1||db.prepare('SELECT count(*) AS n FROM transaction_account_memberships').get().n!==2||db.prepare('SELECT count(*) AS n FROM external_endpoint_refs').get().n!==2)process.exit(1);db.close();"
+            verify = "import {DatabaseSync} from 'node:sqlite';const db=new DatabaseSync('/tmp/fixture-backup.sqlite',{readOnly:true});if(db.prepare('PRAGMA integrity_check').get().integrity_check!=='ok'||db.prepare('PRAGMA foreign_key_check').all().length||db.prepare('PRAGMA user_version').get().user_version!==4||db.prepare('SELECT count(*) AS n FROM transactions').get().n!==2||db.prepare('SELECT count(*) AS n FROM transaction_relations WHERE status=?').get('confirmed').n!==1||db.prepare('SELECT count(*) AS n FROM transaction_account_memberships').get().n!==2||db.prepare('SELECT count(*) AS n FROM external_endpoint_refs').get().n!==2||db.prepare('SELECT count(*) AS n FROM transaction_category_decisions WHERE status=?').get('user_applied').n!==1)process.exit(1);db.close();"
             docker("exec", container, "node", "--input-type=module", "-e", verify)
             check_activity(base, cookie)
-        print("Restricted runtime, owner login, ingestion, persistence, schema3 exports/recovery, account evidence/confirmation/category totals and detail APIs passed with synthetic data.")
+        print("Restricted runtime, owner login, ingestion, persistence, schema4 exports/recovery, category decisions, account evidence/confirmation/category totals and detail APIs passed with synthetic data.")
     except Exception:
         # These isolated containers contain only the synthetic fixtures above.
         for container in containers:
