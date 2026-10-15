@@ -1,0 +1,34 @@
+<details id="forecast-chart-controls" class="forecast-chart-layers">
+  <summary><span>Chart layers</span><span id="forecast-chart-line-count" class="forecast-chart-line-count"></span></summary>
+  <div class="forecast-chart-layer-body">
+    <div class="forecast-chart-layer-groups">
+      <fieldset class="forecast-chart-layer-group">
+        <legend>Funds to show</legend>
+        <div class="forecast-chart-scope-options">
+          <label class="forecast-chart-layer-option"><input type="checkbox" name="forecast-chart-scope" value="cash" checked><span>Cash</span></label>
+          <label class="forecast-chart-layer-option"><input type="checkbox" name="forecast-chart-scope" value="reserve"><span>Savings reserve</span></label>
+          <label class="forecast-chart-layer-option"><input type="checkbox" name="forecast-chart-scope" value="investments"><span>Investments</span></label>
+          <label class="forecast-chart-layer-option"><input type="checkbox" name="forecast-chart-scope" value="cash-reserve"><span>Cash + savings</span></label>
+          <label class="forecast-chart-layer-option"><input type="checkbox" name="forecast-chart-scope" value="cash-investments"><span>Cash + investments</span></label>
+          <label class="forecast-chart-layer-option"><input type="checkbox" name="forecast-chart-scope" value="cash-reserve-investments" checked><span>Cash + savings + investments</span></label>
+        </div>
+      </fieldset>
+      <fieldset class="forecast-chart-layer-group">
+        <legend>Projected methods</legend>
+        <div id="forecast-chart-method-options" class="forecast-chart-method-options"></div>
+      </fieldset>
+    </div>
+    <fieldset class="forecast-chart-layer-group forecast-chart-guide-options">
+      <legend>Guides and points</legend>
+      <div class="forecast-chart-guide-options-list">
+      <label class="forecast-chart-layer-option"><input id="forecast-chart-starting-guides" type="checkbox"><span>Starting totals<small>Horizontal guides at the opening total of each selected funds combination.</small></span></label>
+      <label class="forecast-chart-layer-option"><input id="forecast-chart-funding-limits" type="checkbox"><span>Funding limits<small>Show when the cash path would exhaust cash, savings, investments, or both. These guides do not move money or assume an investment sale.</small></span></label>
+      <label class="forecast-chart-layer-option"><input id="forecast-chart-points" type="checkbox" checked><span>Data points<small>Point shapes help distinguish projected methods.</small></span></label>
+      </div>
+    </fieldset>
+    <p class="forecast-chart-encoding">Color identifies the funds combination. Line patterns and point shapes identify the projected method. History is labelled separately from projections.</p>
+    <p id="forecast-chart-layer-error" class="forecast-chart-layer-error" role="alert" hidden></p>
+    <p id="forecast-chart-crowded-note" class="forecast-chart-layer-warning" role="status" hidden></p>
+    <p id="forecast-chart-layer-notes" class="input-note" hidden></p>
+  </div>
+</details>

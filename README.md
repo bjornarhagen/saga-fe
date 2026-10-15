@@ -290,8 +290,6 @@ with recorded net movements after the previous date through the current date.
 “Other change” is the residual: it may include gains/losses, fees, interest or
 missing transactions, and is not a calculated investment return. Unknown values
 break the comparison. Charts connect known observations, not daily valuations.
-Latest-value subtotals can contain different dates; forecast starting balances
-still require aligned dates for included cash and reserve accounts.
 
 Accounts shows a combined **Total recorded value** across all tracked accounts,
 including investments and accounts outside the cash forecast. Negative balances
@@ -305,10 +303,60 @@ compares dated observations without estimating missing balances or investment
 returns. Page scale choices also apply to open account history charts; expanded
 views keep their controls separate from the page.
 
-Reserve needs are cumulative at each checkpoint; do not sum them across months.
-The reserve is shown separately and is not automatically withdrawn or increased
-by planned savings. The scenario holds monthly assumptions constant; all methods omit
-paydays, bill dates, interest, taxes, investment returns, or daily liquidity.
+Latest-value subtotals can contain different dates. Matching-date starting
+balances require aligned cash and reserve observations. **Use latest values as
+estimates** instead carries earlier recorded values forward unchanged to the
+latest observation date. It does not retime observations or infer missing payments.
+
+Look ahead has three views. **Monthly budget** separates income minus spending
+from cash remaining after savings contributions and works without starting
+balances. **Cash & reserves** models optional reserve withdrawals to maintain
+the cash buffer and credits planned reserve contributions. **Total tracked
+wealth** adds recorded investment and other account values. Its group switches
+filter the displayed total and lines without changing account roles.
+
+Monthly contributions use linked historical destinations by default; the
+reserve/investment split can be set explicitly. Contributions with no tracked
+destination leave the tracked total rather than inventing assets. Transfers
+and reserve withdrawals do not create wealth. Optional savings and investment
+growth use explicit annual scenario assumptions, compounded monthly on opening values; both default to zero. Contributions arrive
+after each month's growth. Cash-flow-adjusted history is an optional alternative:
+it uses Modified Dietz to remove dated capital contributions and withdrawals,
+including transfers across the selected group boundary. Same-group transfers
+cancel. Interest, dividends and fees remain part of return. The user must confirm
+complete movement coverage for the exact dated period and classify external
+movements as capital or return through the app. At least 365 days between common
+observed values are required to apply an annualized rate. Insufficient evidence
+is displayed and holds growth flat; unexplained value change alone is not return.
+Manual assumptions stay available. Historical rates are estimates, especially
+when large flows occur during volatile periods.
+Unknown or incompatible dated values block the affected wealth projection.
+Recorded subtotals remain separate from projected values; no observed aggregate
+wealth history is inferred from mixed-date snapshots.
+
+**Spending pots** in Accounts link an available-cash account to a spending
+category. Leave the spending pace blank to track its recorded remaining balance
+without inventing a future pace. A chosen monthly pace replaces historical
+expenses in that category for every projection method, and is limited by the
+pot's balance. Historical transactions, one-offs, and actual totals stay intact.
+Monthly funding and dated top-ups can be combined or set to zero. They allocate
+existing cash from other included available-cash accounts; they do not create
+income, bank transfers, or balance observations. Each pot projection starts from
+its recorded balance date. A paced pot requires that date to match the main
+forecast date, and stops spending at zero unless planned funding replenishes it.
+
+Use a review threshold to show when a pot needs attention; it does not schedule
+a notification, refill the pot, or close the account. If a paced category changes
+while custom spending is active, review or reset that custom amount before
+projecting it. Ordinary spending must exclude categories estimated by pot plans.
+The monthly cash-change card averages finite pot spending over the selected
+horizon; checkpoint rows retain each month's actual planned amount.
+
+In the cash method comparison, reserve needs are cumulative at each checkpoint;
+do not sum them across months. Those lines show cash before reserve support.
+Use Cash & reserves for the allocation and withdrawal simulation. With income
+trend off, the scenario holds its income input constant. Cash methods omit
+paydays, bill dates, interest, taxes, investment returns, and daily liquidity.
 Review large historical payments before relying on an average.
 
 **Forecast horizon** selects 1–60 future months. **History shown** independently
@@ -319,7 +367,22 @@ including nonrecurring income and excluded historical one-offs. It is not a
 series of observed bank balances. Coverage is limited to recorded history;
 missing payments and gaps before the balance date can make it incomplete.
 
-Select multiple comparison methods to show them together. Outcome and monthly
+**Funds over time** has independent chart layers for cash, savings, investments,
+and their combinations. It starts with cash and the combined total using your
+scenario. Colors identify funds; line patterns and marker shapes identify the
+forecast method. The plot is taller, including in its expanded dialog. Hide
+point markers or reduce layers when comparing many paths.
+
+**Chart layers** also offers horizontal opening-total guides and cash-shortfall
+thresholds against opening savings and investment values. Those static guides
+are informational; they do not model a transfer or assume investment liquidity.
+Recorded histories require complete same-date observations for each combination.
+Unknown observations create gaps. Reconstructed cash stays a separate estimate;
+no past investment performance is inferred from contributions or assumed growth.
+Historical methods allocate contributions using linked historical destination
+shares. Custom allocations apply to your scenario and unchanged assumptions.
+
+Select multiple cash comparison methods for the tables. Outcome and monthly
 tables retain exact øre figures, including coincident chart lines. Your scenario
 and unchanged assumptions use manual monthly inputs when set. The history
 methods estimate income, spending, and savings separately from complete months
@@ -337,7 +400,21 @@ assumptions. Methods that would produce negative spending are unavailable.
 Incomplete initial and latest months are excluded; empty months inside covered
 history count as zero. Longer horizons magnify assumption differences. These
 projections are alternatives, not confidence intervals or probabilities.
-Horizon, history display, and comparison choices are saved with existing settings.
+**Apply income trend to all projections** is one shared switch, off by default.
+It adjusts income in your scenario and every comparison method, including
+unchanged assumptions and seasonal repeat. Each month uses a proportional factor
+from the learned damped trend; each method keeps its own base income, spending
+and contribution estimates. Zero income stays zero. Manual income inputs remain
+unchanged, and monthly cards show projected averages over the chosen horizon.
+
+The trend uses up to 36 complete months and requires 24 covered months, 18 income
+months, six matching calendar-month comparisons, and income in each of the latest
+three months. Median year-over-year slopes and a recent three-month median anchor
+produce the factors, with 0.98 damping. Falling income is supported. Insufficient
+evidence blocks projections while the switch is on; switching it off restores
+the original methods. Old separate income-trend selections migrate to this
+shared switch without changing financial data. Horizon, history display, growth
+controls, and comparison choices are saved with existing settings.
 
 ## Data ingestion and private storage
 

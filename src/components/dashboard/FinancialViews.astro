@@ -1,0 +1,88 @@
+<section id="financial-views" class="financial-views" aria-labelledby="financial-views-title">
+  <header class="financial-views-heading">
+    <div><p class="eyebrow">THREE WAYS TO LOOK AHEAD</p><h2 id="financial-views-title">Your budget, your buffer, your assets</h2></div>
+    <div class="financial-view-tools">
+      <div class="financial-view-buttons" role="group" aria-label="Financial view">
+        <button type="button" data-financial-view="budget" aria-pressed="true">Monthly budget</button>
+        <button type="button" data-financial-view="liquidity" aria-pressed="false">Cash &amp; reserves</button>
+        <button type="button" data-financial-view="wealth" aria-pressed="false">Total tracked wealth</button>
+      </div>
+      <label class="financial-horizon">Forecast horizon<select id="financial-horizon">{Array.from({ length: 60 }, (_, i) => i + 1).map(months => <option value={months} selected={months === 3}>{months} {months === 1 ? 'month' : 'months'}{months % 12 === 0 ? ` · ${months / 12} ${months === 12 ? 'year' : 'years'}` : ''}</option>)}</select></label>
+    </div>
+  </header>
+  <button id="financial-edit-assumptions" type="button" class="text-button financial-edit-assumptions">Edit balances &amp; monthly assumptions →</button>
+
+  <article id="financial-budget-panel" class="card financial-view-panel" aria-labelledby="financial-budget-title">
+    <div class="card-heading"><div><p class="eyebrow">INCOME VERSUS SPENDING</p><h2 id="financial-budget-title">Can your income cover your spending?</h2></div></div>
+    <p class="input-note">Savings and investment contributions move money out of everyday cash. They are separate from spending on bills and purchases.</p>
+    <dl id="financial-budget-stats" class="statistics-grid financial-budget-stats"></dl>
+    <p id="financial-budget-message" class="financial-view-message" aria-live="polite"></p>
+    <p class="input-note">These figures use your scenario assumptions below. With income growth enabled, they show monthly averages over the selected horizon. Planned spending pots are also averaged over that horizon. A month-one expense is shown separately in the cash projection.</p>
+  </article>
+
+  <article id="financial-liquidity-panel" class="card financial-view-panel" aria-labelledby="financial-liquidity-title" hidden>
+    <div class="card-heading"><div><p class="eyebrow">EVERYDAY CASH AND BACKUP FUNDS</p><h2 id="financial-liquidity-title">Will you need your savings reserve?</h2></div></div>
+    <label class="checkbox financial-reserve-toggle"><input id="financial-use-reserve" type="checkbox" /> Model reserve withdrawals to keep the cash buffer</label>
+    <p class="input-note">This is a hypothetical transfer from your reserve to available cash. It does not move money at your bank. Investments and other accounts are never sold or withdrawn automatically.</p>
+    <dl id="financial-liquidity-stats" class="statistics-grid statistics-grid-three"></dl>
+    <div id="financial-liquidity-chart" class="forecast-chart"></div>
+    <p id="financial-liquidity-message" class="financial-view-message" aria-live="polite"></p>
+    <div id="financial-liquidity-table" class="table-scroll"></div>
+  </article>
+
+  <article id="financial-wealth-panel" class="card financial-view-panel" aria-labelledby="financial-wealth-title" hidden>
+    <div class="card-heading"><div><p class="eyebrow">A WIDER VIEW</p><h2 id="financial-wealth-title">Total tracked wealth</h2></div></div>
+    <p class="input-note">Account values you have recorded, including savings and investments. This total is limited to tracked accounts; it does not include unrecorded property, debts, or other assets.</p>
+    <fieldset class="financial-asset-groups"><legend>Include in this view</legend>
+      <label class="checkbox"><input type="checkbox" name="financial-asset-group" value="cash" checked /> Available cash</label>
+      <label class="checkbox"><input type="checkbox" name="financial-asset-group" value="reserve" checked /> Savings reserve</label>
+      <label class="checkbox"><input type="checkbox" name="financial-asset-group" value="investments" checked /> Investments</label>
+      <label class="checkbox"><input type="checkbox" name="financial-asset-group" value="other" checked /> Other tracked accounts</label>
+    </fieldset>
+    <p class="input-note">These switches change the chart and displayed total. Account roles and the cash forecast stay the same.</p>
+    <dl id="financial-wealth-stats" class="statistics-grid statistics-grid-three"></dl>
+    <p id="financial-snapshot-note" class="input-note"></p>
+    <div id="financial-wealth-chart" class="forecast-chart"></div>
+    <p id="financial-wealth-message" class="financial-view-message" aria-live="polite"></p>
+  </article>
+
+  <section id="financial-growth-assumptions" class="card financial-growth-assumptions" aria-labelledby="financial-growth-title" hidden>
+    <div class="card-heading"><div><p class="eyebrow">GROWTH SEPARATE FROM CONTRIBUTIONS</p><h2 id="financial-growth-title">Savings and investment growth</h2></div></div>
+    <p id="financial-growth-note" class="input-note">Choose a manual annual assumption or use cash-flow-adjusted history. Recorded deposits and withdrawals are removed before estimating historical growth. Growth compounds monthly; an estimate is not a guaranteed return.</p>
+    <div class="financial-growth-groups">
+      {[
+        { key: 'reserve', label: 'Savings reserve', rateId: 'financial-reserve-growth', rateLabel: 'Assumed annual savings growth' },
+        { key: 'investments', label: 'Investments', rateId: 'financial-growth', rateLabel: 'Assumed annual investment growth' },
+      ].map(group => <fieldset class="financial-growth-group">
+        <legend>{group.label}</legend>
+        <div class="financial-growth-control">
+          <label>Growth method<select id={`financial-growth-source-${group.key}`} data-growth-source={group.key} aria-describedby={`financial-growth-evidence-${group.key}`}><option value="manual">Manual assumption</option><option value="history">Cash-flow-adjusted history</option></select></label>
+          <label>{group.rateLabel} <span>% / year</span><input id={group.rateId} type="number" min="-100" max="1000" step="0.01" value="0" aria-describedby={`financial-growth-note financial-growth-evidence-${group.key} financial-input-error`} /></label>
+        </div>
+        <p id={`financial-growth-evidence-${group.key}`} class="input-note financial-growth-evidence" aria-live="polite"></p>
+        <div id={`financial-growth-history-${group.key}`} class="financial-growth-history" hidden>
+          <label class="checkbox financial-growth-coverage"><input id={`financial-growth-coverage-${group.key}`} type="checkbox" data-growth-coverage={group.key} /><span id={`financial-growth-coverage-label-${group.key}`}>All contributions and withdrawals for this period are recorded</span></label>
+          <p id={`financial-growth-confirmed-${group.key}`} class="input-note"></p>
+          <div id={`financial-growth-movements-${group.key}`} class="financial-growth-movements"></div>
+        </div>
+      </fieldset>)}
+    </div>
+    <p class="input-note">A manual rate of 0% holds values flat apart from contributions and reserve withdrawals. Historical growth needs at least a year between common dated account values, plus a complete record of movements for that period. Large deposits or withdrawals during volatile markets can make this return estimate less accurate.</p>
+  </section>
+
+  <section id="financial-allocation" class="card financial-allocation" aria-labelledby="financial-allocation-title" hidden>
+    <div class="card-heading"><div><p class="eyebrow">WHERE CONTRIBUTIONS GO</p><h2 id="financial-allocation-title">Monthly savings allocation</h2></div><button id="financial-reset-allocation" type="button" class="text-button">Use linked history</button></div>
+    <p class="input-note">Split the monthly savings and investment amount from your scenario. Linked history is the starting point; you can set a different split. These amounts move existing cash, so they do not add income or create wealth.</p>
+    <div class="financial-allocation-inputs"><label>To savings reserve <span>NOK / month</span><input id="financial-reserve-contribution" type="number" min="0" step="0.01" aria-describedby="financial-allocation-note financial-input-error" /></label><label>To investments <span>NOK / month</span><input id="financial-investment-contribution" type="number" min="0" step="0.01" aria-describedby="financial-allocation-note financial-input-error" /></label></div>
+    <p id="financial-allocation-note" class="input-note"></p>
+  </section>
+  <p id="financial-input-error" class="financial-input-error" role="alert" hidden></p>
+
+  <details id="financial-account-coverage" class="card financial-account-coverage" hidden>
+    <summary>Which accounts are included?</summary>
+    <p class="input-note">Each account appears in one group. Investment accounts belong to investments even when their cash-forecast role is excluded. Other excluded accounts stay outside everyday cash and reserve withdrawals.</p>
+    <p id="financial-coverage-note" class="input-note"></p>
+    <div class="table-scroll"><table><caption class="sr-only">Account coverage and latest recorded balances</caption><thead><tr><th scope="col">Account</th><th scope="col">Group</th><th scope="col">Account type / cash role</th><th scope="col">Recorded on</th><th scope="col" class="numeric">Recorded value</th></tr></thead><tbody id="financial-coverage-rows"></tbody></table></div>
+    <button id="financial-manage-accounts" type="button" class="text-button">Manage accounts and recorded values →</button>
+  </details>
+</section>

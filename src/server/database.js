@@ -8,6 +8,7 @@ import { projectActivity } from './activity.js';
 import { valueHistory } from '../lib/account-values.js';
 import { applyOverrides } from '../lib/engine.js';
 import { similarCategoryTransactions } from '../lib/categorization.js';
+import { normalizeIncomeGrowthSettings } from '../lib/forecast-settings.js';
 
 const schema = `
 CREATE TABLE IF NOT EXISTS accounts (id TEXT PRIMARY KEY, name TEXT NOT NULL, currency TEXT NOT NULL DEFAULT 'NOK', role TEXT NOT NULL DEFAULT 'available' CHECK(role IN ('available','reserve','excluded')), name_override INTEGER NOT NULL DEFAULT 0, role_override INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL);
@@ -166,7 +167,7 @@ export function createStore(path = ':memory:') {
       return { decisions: relationRows() };
     });
   };
-  const getSettings = () => { const row = query("SELECT value_json FROM settings WHERE key='forecast'"); return row ? { balanceSource: 'manual', ...JSON.parse(row.value_json) } : null; };
+  const getSettings = () => { const row = query("SELECT value_json FROM settings WHERE key='forecast'"); return row ? normalizeIncomeGrowthSettings({ balanceSource: 'manual', ...JSON.parse(row.value_json) }) : null; };
   const checkOwnedAccounts = (id, value) => {
     const transaction = query('SELECT amount FROM transactions WHERE id=?', id);
     if (transaction && value.kind) v.kindForAmount(value.kind, transaction.amount);
@@ -201,6 +202,7 @@ export function createStore(path = ':memory:') {
   const saveSettings = input => {
     const incoming = v.settings(input);
     return atomic(() => {
+      for (const plan of incoming.spendingPlans || []) if (!query('SELECT id FROM accounts WHERE id=?', plan.accountId)) throw new v.ValidationError('The spending pot account does not exist.');
       const existing = getSettings() || {};
       const value = { balanceSource: 'manual', ...existing, ...incoming };
       // Fields merge to let different controls save independently; assumptions replace to allow reset.
@@ -305,8 +307,12 @@ export function createStore(path = ':memory:') {
     const projection = activityProjection();
     const transactions = projection.rows;
     const detail = accountPayload();
+    const growthAccountIds = new Set(detail.accounts.filter(account => account.accountType === 'investment' || account.role === 'reserve').map(account => account.id));
+    const growthEndpoint = endpoint => endpoint ? { accountId: endpoint.accountId || null, owned: !!endpoint.owned } : null;
+    const growthFlows = projection.flows.filter(flow => growthAccountIds.has(flow.from?.accountId) || growthAccountIds.has(flow.to?.accountId))
+      .map(flow => ({ id: flow.id, date: flow.date, amount: flow.amount, from: growthEndpoint(flow.from), to: growthEndpoint(flow.to), label: flow.description || 'Recorded movement' }));
     const duplicateRows = query('SELECT COALESCE(SUM(CASE WHEN occurrence>0 THEN 1 ELSE 0 END),0) AS count FROM source_transaction_keys').count;
-    return { transactions, accounts: detail.accounts.map(account => account.name), accountDetails: accountValues(detail.accounts, projection), accountTotals: detail.totals, overrides: getOverrides(), settings: getSettings(), metadata: { rows: transactions.length, duplicateRows, zeroRows: transactions.filter(tx => tx.amount === 0).length, firstDate: transactions.at(-1)?.date || null, lastDate: transactions[0]?.date || null, currency: 'NOK', hasBalances: detail.totals.hasBalances, sources: query('SELECT COUNT(*) AS count FROM ingest_sources').count, batches: query('SELECT COUNT(*) AS count FROM ingest_batches').count } };
+    return { transactions, growthFlows, accounts: detail.accounts.map(account => account.name), accountDetails: accountValues(detail.accounts, projection), accountTotals: detail.totals, overrides: getOverrides(), settings: getSettings(), metadata: { rows: transactions.length, duplicateRows, zeroRows: transactions.filter(tx => tx.amount === 0).length, firstDate: transactions.at(-1)?.date || null, lastDate: transactions[0]?.date || null, currency: 'NOK', hasBalances: detail.totals.hasBalances, sources: query('SELECT COUNT(*) AS count FROM ingest_sources').count, batches: query('SELECT COUNT(*) AS count FROM ingest_batches').count } };
   });
   const ingest = input => {
     const adapted = adapt(input);

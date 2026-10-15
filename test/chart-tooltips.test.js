@@ -3,14 +3,14 @@ import assert from 'node:assert/strict';
 import { initializeChartTooltips } from '../src/scripts/chart-tooltips.js';
 
 // A small event surface exercises the controller without a browser dependency.
-function harness(inDialog = false) {
+function harness(inDialog = false, shapes = []) {
   const listeners = {}, windowListeners = {}, attributes = new Map();
   let observer;
   const tooltip = { addEventListener() {}, hidden: true, style: {}, innerHTML: '', setAttribute(name, value) { this[name] = value; }, contains: target => target === tooltip, getBoundingClientRect: () => ({ width: 240, height: 160 }) };
   const selection = { innerHTML: '', replaceChildren() { this.innerHTML = ''; } };
   const matrix = { inverse() { return this; } };
   const svg = { getScreenCTM: () => matrix };
-  const points = [10, 50, 90].map((x, i) => ({ x, period: `Synthetic month ${i + 1}`, rows: [{ name: 'Spending', value: `${i + 1},05 kr`, color: 'var(--chart-out)', y: 50 }], extra: [] }));
+  const points = [10, 50, 90].map((x, i) => ({ x, period: `Synthetic month ${i + 1}`, rows: (shapes.length ? shapes : [undefined]).map((shape, seriesIndex) => ({ name: 'Spending', value: `${i + 1},05 kr`, color: 'var(--chart-out)', y: 50, shape, seriesIndex })), extra: [] }));
   const modal = { append(element) { element.parentElement = this; } };
   const chart = {
     dataset: { chartData: JSON.stringify({ title: 'Synthetic spending', left: 10, right: 90, top: 0, bottom: 100, points }) },
@@ -131,4 +131,17 @@ test('pointer tooltips stay beside the cursor when the screen has room', () => {
   assert.ok(parseFloat(h.tooltip.style.top) > 50);
   h.send('pointermove', { clientX: 50, clientY: 80 });
   assert.ok(parseFloat(h.tooltip.style.top) > 80);
+});
+
+test('keyboard and pointer selection retain each series marker shape', () => {
+  const h = harness(false, ['circle', 'square', 'diamond', 'triangle']);
+  h.send('focusin', { target: h.chart });
+  for (const shape of ['circle', 'square', 'diamond', 'triangle']) {
+    assert.match(h.selection.innerHTML, new RegExp(`data-chart-shape="${shape}"`));
+    assert.match(h.tooltip.innerHTML, new RegExp(`data-chart-shape="${shape}"`));
+  }
+  h.send('pointermove', { clientX: 90 });
+  assert.match(h.tooltip.innerHTML, /Synthetic month 3/);
+  assert.match(h.selection.innerHTML, /<rect[^>]+data-chart-shape="square"/);
+  assert.match(h.selection.innerHTML, /<polygon[^>]+data-chart-shape="triangle"/);
 });

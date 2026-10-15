@@ -8,18 +8,20 @@ const escape = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&': 
 const integerAmount = value => value === '' ? null : Math.round(Number(value) * 100);
 const options = (labels, selected) => Object.entries(labels).map(([value, label]) => `<option value="${value}" ${value === selected ? 'selected' : ''}>${label}</option>`).join('');
 
-export function accountStartingPoint(accounts) {
+export function accountStartingPoint(accounts, { estimateLatest = false } = {}) {
   const included = accounts.filter(a => a.role !== 'excluded');
   if (included.some(a => a.accountType === 'investment')) return { ready: false, reason: 'Keep investment accounts outside available cash and savings reserves.' };
   if (!accounts.some(a => a.role === 'available')) return { ready: false, reason: 'Choose at least one account as available cash.' };
   if (included.some(a => a.balance === null)) return { ready: false, reason: 'Set balances for every available and reserve account, or exclude accounts you do not want to use.' };
   const dates = new Set(included.map(a => a.balanceDate));
-  if (dates.size !== 1 || ![...dates][0]) return { ready: false, reason: 'Use the same balance date for all included accounts. Balances from different dates cannot form one starting point.' };
+  if (!estimateLatest && (dates.size !== 1 || ![...dates][0])) return { ready: false, reason: 'Use matching balance dates, or choose latest values as estimates in Look ahead.' };
+  if (included.some(a => !a.balanceDate)) return { ready: false, reason: 'Record a balance date for every included account.' };
   const sum = role => Number(included.filter(a => a.role === role).reduce((total, a) => total + BigInt(a.balance), 0n));
   const cash = sum('available'), savings = sum('reserve');
   if (!Number.isSafeInteger(cash) || !Number.isSafeInteger(savings)) return { ready: false, reason: 'Combined balances exceed the supported exact amount range.' };
   if (savings < 0) return { ready: false, reason: 'The reserve total is negative. Review the included reserve accounts before forecasting.' };
-  return { ready: true, date: [...dates][0], cash, savings };
+  const date = estimateLatest ? accounts.filter(a => a.balance !== null && a.balanceDate).map(a => a.balanceDate).sort().at(-1) : [...dates][0];
+  return { ready: true, date, cash, savings, ...(estimateLatest ? { estimated: dates.size !== 1 || [...dates][0] !== date } : {}) };
 }
 
 export function createAccountController({ api, money, today, onChange, onUse, onError, toast, activityLink = () => '' }) {
@@ -92,5 +94,5 @@ export function createAccountController({ api, money, today, onChange, onUse, on
     finally { button.disabled = false; }
   });
   $('use-account-balances').addEventListener('click', () => onUse());
-  return { setData(rows) { accounts = rows; render(); }, startingPoint() { return accountStartingPoint(accounts); }, redrawCharts() { insights.redraw(); redrawOpenHistories(); } };
+  return { setData(rows) { accounts = rows; render(); }, startingPoint(options) { return accountStartingPoint(accounts, options); }, redrawCharts() { insights.redraw(); redrawOpenHistories(); } };
 }

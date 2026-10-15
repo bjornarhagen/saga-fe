@@ -222,6 +222,7 @@ export function projectActivity({ transactions, overrides, accounts, accountIden
     return { endpoint: detailEndpoint(node), summary: totals, summaries, categorySummaries, transactions: activityRows, flows: selected, coverage: { firstDate: selected.at(-1)?.date || null, lastDate: selected[0]?.date || null, allHistory: true }, notes: ['Totals describe imported movement, not an opening or current balance. Source suggestions are separate from account memberships confirmed by you.', 'Matched debit and credit rows of an internal bank transfer count as one payment in totals; both original transaction rows remain visible. Without bank transaction IDs, same-day same-amount transfer leg matching is inferred.'] };
   };
   return {
+    flows,
     rows: rows.map(clean),
     directory: () => ({ endpoints: [...nodes.values()].map(node => { const summaries = summariesFor(node.id); return { ...publicEndpoint(node), summary: summaries.active, summaries }; }).sort((a, b) => Number(b.owned) - Number(a.owned) || b.summary.payments - a.summary.payments || a.name.localeCompare(b.name)) }),
     endpointActivity,

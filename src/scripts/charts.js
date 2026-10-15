@@ -1,6 +1,7 @@
 import { pageChartScale, normalizeChartScale, chartScaleLabel } from './page-chart-scale.js';
 import { CHART_SCALES } from './page-chart-scale.js';
 import { registerBlock } from './block-dialog.js';
+import { chartLineStyle, chartSampleMarkup, chartSymbolMarkup } from './chart-symbols.js';
 
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const compact = new Intl.NumberFormat('en-GB', { notation: 'compact', maximumFractionDigits: 1 });
@@ -127,7 +128,9 @@ export function timeSeriesChart({ points, series, title, format, label, width = 
   const w = Math.max(280, width), h = Math.max(250, height);
   const values = points.flatMap(point => series.map(item => point[item.key])).filter(Number.isFinite);
   if (!values.length) return `<p class="no-results">${esc(empty)}</p>`;
-  const g = geometry(type === 'bar' ? [...values, ...references.map(item => item.value)] : values, w, h, [markers.length ? 30 : 12, 8, 30, 0], scale, type === 'bar');
+  const validReferences = references.filter(item => Number.isFinite(item.value));
+  const rangeReferences = validReferences.filter(item => type === 'bar' || item.includeInRange === true);
+  const g = geometry([...values, ...rangeReferences.map(item => item.value)], w, h, [markers.length ? 30 : 12, 8, 30, 0], scale, type === 'bar');
   const baseline = g.y(Math.max(g.min, Math.min(g.max, 0)));
   const inRange = item => item.value >= g.min && item.value <= g.max;
   const referencePosition = item => inRange(item) ? '' : item.value < g.min ? ' · below range' : ' · above range';
@@ -148,19 +151,39 @@ export function timeSeriesChart({ points, series, title, format, label, width = 
   const stride = Math.max(1, Math.ceil((points.length - 1) / Math.max(1, Math.floor((w - 80) / 130))));
   let svg = `<svg class="time-series-svg" viewBox="0 0 ${w} ${h}" role="img" aria-label="${esc(title)}"><desc>${esc(title)}. ${scaleName} scale. Vertical axis ${esc(format(g.min))} to ${esc(format(g.max))}. ${esc(label(points[0]))} to ${esc(label(points.at(-1)))}. Exact figures follow in the data table.</desc>`;
   svg += ticks.map(value => `<line x1="${g.left}" x2="${g.right}" y1="${g.y(value)}" y2="${g.y(value)}" stroke="var(--chart-grid)"${value === 0 ? ' stroke-width="1.5"' : ''}/><text x="${g.left - 8}" y="${g.y(value) + 4}" text-anchor="end" fill="var(--chart-label)">${esc(axisText(value))}</text>`).join('');
-  svg += references.filter(inRange).map(item => `<line x1="${g.left}" x2="${g.right}" y1="${g.y(item.value)}" y2="${g.y(item.value)}" stroke="var(--border-strong)" stroke-dasharray="5 5"/>`).join('');
+  svg += validReferences.filter(inRange).map(item => {
+    const style = chartLineStyle(item, true);
+    return `<line data-chart-reference="${esc(item.name)}" x1="${g.left}" x2="${g.right}" y1="${g.y(item.value)}" y2="${g.y(item.value)}" stroke="${esc(style.color)}" stroke-width="${style.strokeWidth}" opacity="${style.opacity}"${style.dashArray ? ` stroke-dasharray="${style.dashArray}"` : ''} vector-effect="non-scaling-stroke"/>`;
+  }).join('');
   svg += markers.map(marker => `<line x1="${x(marker.index)}" x2="${x(marker.index)}" y1="30" y2="${g.bottom}" stroke="var(--chart-label)" stroke-dasharray="3 4"/><text x="${x(marker.index)}" y="14" text-anchor="${x(marker.index) > g.right - 100 ? 'end' : x(marker.index) < g.left + 100 ? 'start' : 'middle'}" fill="var(--chart-label)">${esc(marker.name)}</text>`).join('');
   svg += series.map((item, index) => {
+    const style = chartLineStyle(item);
     if (type === 'bar') {
-      return points.map((point, i) => !Number.isFinite(point[item.key]) ? '' : `<rect data-chart-series="${index}" x="${seriesX(i, index) - bar / 2}" y="${Math.min(g.y(0), g.y(point[item.key]))}" width="${bar}" height="${Math.abs(g.y(point[item.key]) - g.y(0))}" fill="${item.color}"/>`).join('');
+      return points.map((point, i) => !Number.isFinite(point[item.key]) ? '' : `<rect data-chart-series="${index}" x="${seriesX(i, index) - bar / 2}" y="${Math.min(g.y(0), g.y(point[item.key]))}" width="${bar}" height="${Math.abs(g.y(point[item.key]) - g.y(0))}" fill="${esc(style.color)}" opacity="${style.opacity}"/>`).join('');
     }
     const values = points.map(point => point[item.key]);
-    const path = values.map((value, i) => Number.isFinite(value) ? `${i && Number.isFinite(values[i - 1]) ? 'L' : 'M'}${x(i).toFixed(2)},${g.y(value).toFixed(2)}` : '').join(' ');
-    return `${series.length === 1 && points.length > 1 && values.every(Number.isFinite) ? `<path d="${path} L${x(points.length - 1)},${baseline} L${x(0)},${baseline} Z" fill="${item.color}" fill-opacity=".08"/>` : ''}<path data-chart-series="${index}" d="${path}" stroke="${item.color}" stroke-width="2.5" fill="none"${item.dashed ? ' stroke-dasharray="6 5"' : ''} stroke-linejoin="round" vector-effect="non-scaling-stroke"/>${points.map((point, i) => !Number.isFinite(point[item.key]) ? '' : `<circle data-chart-series="${index}" cx="${x(i)}" cy="${g.y(point[item.key])}" r="${points.length > 40 ? 2 : 3.5}" fill="var(--bg-1)" stroke="${item.color}" stroke-width="2"/>`).join('')}`;
+    const pathParts = [], segments = [];
+    let segment = [];
+    values.forEach((value, i) => {
+      // A union of independently dated observations has absent keys where a
+      // different series was observed. Skip those dates only when requested;
+      // an explicit null still marks a real gap in this series.
+      if (item.skipMissingDates === true && value === undefined) return;
+      if (Number.isFinite(value)) {
+        pathParts.push(`${segment.length ? 'L' : 'M'}${x(i).toFixed(2)},${g.y(value).toFixed(2)}`);
+        segment.push(i);
+      } else if (segment.length) { segments.push(segment); segment = []; }
+    });
+    if (segment.length) segments.push(segment);
+    const path = pathParts.join(' ');
+    const indices = values.flatMap((value, i) => Number.isFinite(value) ? [i] : []);
+    const pointStride = Number.isSafeInteger(item.pointStride) && item.pointStride > 0 ? item.pointStride : indices.length > 40 ? Math.ceil(indices.length / 18) : 1;
+    const pointIndices = new Set([...indices.filter((i, offset) => offset % pointStride === 0), ...segments.flatMap(segment => [segment[0], segment.at(-1)])]);
+    return `${series.length === 1 && points.length > 1 && values.every(Number.isFinite) ? `<path d="${path} L${x(points.length - 1)},${baseline} L${x(0)},${baseline} Z" fill="${esc(style.color)}" fill-opacity="${.08 * style.opacity}"/>` : ''}<path data-chart-series="${index}" d="${path}" stroke="${esc(style.color)}" stroke-width="${style.strokeWidth}" opacity="${style.opacity}" fill="none"${style.dashArray ? ` stroke-dasharray="${style.dashArray}"` : ''} stroke-linejoin="round" vector-effect="non-scaling-stroke"/>${item.showPoints === false ? '' : indices.filter(i => pointIndices.has(i)).map(i => chartSymbolMarkup({ ...style, seriesIndex: index, x: x(i), y: g.y(values[i]), radius: points.length > 40 ? 2.5 : 3.5, strokeWidth: 2 })).join('')}`;
   }).join('');
   svg += points.map((point, i) => i % stride === 0 || i === points.length - 1 ? `<text x="${x(i)}" y="${h - 10}" text-anchor="${i === 0 ? 'start' : i === points.length - 1 ? 'end' : 'middle'}" fill="var(--chart-label)">${esc(label(point))}</text>` : '').join('') + '<g class="chart-selection" aria-hidden="true"></g></svg>';
-  const plot = interactivePlot(svg, { title, scale, domain: { min: g.min, max: g.max }, left: g.left, right: g.right, top: markers.length ? 30 : 12, bottom: g.bottom, points: points.map((point, i) => ({ x: x(i), period: pointPeriod(point, label(point)), details: pointDetails(point), rows: series.map((item, seriesIndex) => ({ item, seriesIndex })).filter(({ item }) => Number.isFinite(point[item.key])).map(({ item, seriesIndex }) => ({ seriesIndex, name: item.name, value: format(point[item.key]), color: item.color, x: seriesX(i, seriesIndex), y: g.y(point[item.key]) })), extra: [...references.map(item => ({ name: item.name, value: format(item.value) })), ...tooltipRows(point)] })).filter(point => point.rows.length) });
-  return `<figure class="time-series-figure"><div class="chart-legend">${series.map(item => `<span><i style="--series-color:${item.color}" class="${item.dashed ? 'dashed' : ''}"></i>${esc(item.name)}</span>`).join('')}${references.map(item => `<span><i class="dashed" style="--series-color:var(--border-strong)"></i>${esc(item.name)} ${esc(format(item.value))}${referencePosition(item)}</span>`).join('')}<span class="chart-currency">NOK</span></div>${plot}<figcaption>${esc(label(points[0]))} – ${esc(label(points.at(-1)))} · ${scaleName} scale${rangeNote}</figcaption><details class="chart-data"><summary>View chart figures</summary><div class="table-scroll"><table><caption class="sr-only">${esc(title)}</caption><thead><tr><th scope="col">Period</th>${series.map(item => `<th scope="col" class="numeric">${esc(item.name)}</th>`).join('')}</tr></thead><tbody>${points.map(point => `<tr><th scope="row">${point.starting ? 'Start · ' : ''}${esc(point.month || point.date || label(point))}${point.end && point.end !== point.date ? ` – ${esc(point.end)}` : ''}</th>${series.map(item => `<td class="numeric">${Number.isFinite(point[item.key]) ? esc(format(point[item.key])) : '—'}</td>`).join('')}</tr>`).join('')}</tbody></table></div></details></figure>`;
+  const plot = interactivePlot(svg, { title, scale, domain: { min: g.min, max: g.max }, left: g.left, right: g.right, top: markers.length ? 30 : 12, bottom: g.bottom, points: points.map((point, i) => ({ x: x(i), period: pointPeriod(point, label(point)), details: pointDetails(point), rows: series.map((item, seriesIndex) => ({ item, seriesIndex })).filter(({ item }) => Number.isFinite(point[item.key])).map(({ item, seriesIndex }) => ({ seriesIndex, name: item.name, value: format(point[item.key]), ...chartLineStyle(item), x: seriesX(i, seriesIndex), y: g.y(point[item.key]) })), extra: [...validReferences.map(item => ({ name: item.name, value: format(item.value), ...chartLineStyle(item, true), reference: true })), ...tooltipRows(point)] })).filter(point => point.rows.length) });
+  return `<figure class="time-series-figure"><div class="chart-legend">${series.map(item => `<span>${chartSampleMarkup(item)}${esc(item.name)}</span>`).join('')}${validReferences.map(item => `<span>${chartSampleMarkup(item, true)}${esc(item.name)} ${esc(format(item.value))}${referencePosition(item)}</span>`).join('')}<span class="chart-currency">NOK</span></div>${plot}<figcaption>${esc(label(points[0]))} – ${esc(label(points.at(-1)))} · ${scaleName} scale${rangeNote}</figcaption><details class="chart-data"><summary>View chart figures</summary><div class="table-scroll"><table><caption class="sr-only">${esc(title)}</caption><thead><tr><th scope="col">Period</th>${series.map(item => `<th scope="col" class="numeric">${esc(item.name)}</th>`).join('')}</tr></thead><tbody>${points.map(point => `<tr><th scope="row">${point.starting ? 'Start · ' : ''}${esc(point.month || point.date || label(point))}${point.end && point.end !== point.date ? ` – ${esc(point.end)}` : ''}</th>${series.map(item => `<td class="numeric">${Number.isFinite(point[item.key]) ? esc(format(point[item.key])) : '—'}</td>`).join('')}</tr>`).join('')}</tbody>${validReferences.length ? `<tfoot>${validReferences.map(item => `<tr><th scope="row">Reference · ${esc(item.name)}</th><td class="numeric" colspan="${series.length}">${esc(format(item.value))}${referencePosition(item)}</td></tr>`).join('')}</tfoot>` : ''}</table></div></details></figure>`;
 }
 
 
@@ -187,7 +210,7 @@ export function chartBlock(options) {
     ],
     render(container, settings) {
       const series = snapshot.series.filter(item => settings.series.includes(item.key));
-      container.innerHTML = series.length ? timeSeriesChart({ ...snapshot, series, scale: settings.scale, type: settings.type, width: container.clientWidth || 960, height: 420 }) : '<p class="no-results">Select a series to show the chart.</p>';
+      container.innerHTML = series.length ? timeSeriesChart({ ...snapshot, series, scale: settings.scale, type: settings.type, width: container.clientWidth || 960, height: Math.max(420, snapshot.height || 0) }) : '<p class="no-results">Select a series to show the chart.</p>';
       const figures = container.querySelector('.chart-data');
       if (figures) figures.open = settings.figures;
     },
