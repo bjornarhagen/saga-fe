@@ -617,3 +617,62 @@ body:has(#block-dialog[open]) { overflow: hidden; }
 .page-heading > .page-chart-scale { flex: 0 0 auto; }
 .page-heading-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-4); max-width: 100%; }
 .page-heading > .page-heading-actions { flex: 0 0 auto; }
+
+/* Accounts start with the whole picture, then show the recorded parts. */
+.account-page-controls { display: flex; align-items: end; flex-wrap: wrap; gap: var(--s-4); width: 100%; }
+.account-page-controls > .outline-button { flex-shrink: 0; }
+.account-total-card { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--s-5); margin-bottom: var(--s-5); border-color: var(--accent-dim); background: color-mix(in srgb, var(--accent) 3%, var(--bg-1)); }
+.account-total-card::before { border-color: var(--accent); }
+.account-total-main { min-width: 0; }
+.account-total-card .eyebrow { color: var(--link); margin-bottom: var(--s-3); }
+.account-total-card h2 { color: var(--fg-1); font-size: 12px; letter-spacing: 0; }
+.account-total-value { margin: var(--s-4) 0 var(--s-3); font-family: var(--font-mono); font-size: clamp(30px, 6vw, 64px); font-weight: 400; font-variant-numeric: tabular-nums; letter-spacing: -.06em; line-height: 1.2; overflow-wrap: anywhere; }
+.account-total-value .unit { font-size: 12px; letter-spacing: 0; }
+.account-total-note { margin: 0; max-width: 64ch; font-size: 12px; color: var(--fg-1); line-height: 1.8; }
+.account-total-dates { margin: var(--s-2) 0 0; font-family: var(--font-mono); font-size: 10px; color: var(--fg-dim); line-height: 1.8; }
+.account-total-details { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-content: center; gap: var(--s-4) var(--s-5); margin: 0; border-top: 1px solid var(--border); padding-top: var(--s-5); }
+.account-total-stat { min-width: 0; }
+.account-total-stat dt, .account-history-stat dt { font-family: var(--font-mono); font-size: 9px; color: var(--fg-dim); line-height: 1.8; }
+.account-total-stat dd { margin: var(--s-1) 0 0; font-family: var(--font-mono); font-size: 14px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.account-total-stat dd small { display: block; margin-top: var(--s-1); color: var(--fg-dim); font-size: 10px; font-weight: 400; }
+.account-insights-grid { display: grid; grid-template-columns: minmax(0, 1fr); align-items: stretch; gap: var(--s-5); margin-bottom: var(--s-5); }
+.account-insight-card { display: flex; flex-direction: column; }
+.account-insight-card .card-heading { align-items: start; margin-bottom: var(--s-4); }
+.account-chart-control { min-width: 0; width: 100%; margin-bottom: var(--s-5); color: var(--fg-dim); }
+.account-chart-control select { max-width: 100%; }
+.account-insight-card > .chart-note { margin-top: auto; padding-top: var(--s-4); }
+.account-allocation { display: grid; align-content: start; gap: var(--s-4); min-width: 0; margin-bottom: var(--s-5); }
+.account-allocation-axis { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--s-2); font-family: var(--font-mono); color: var(--fg-dim); font-size: 9px; line-height: 1.8; }
+.account-allocation-axis > :nth-child(2) { text-align: center; }
+.account-allocation-axis > :last-child { text-align: right; }
+.account-allocation-row { min-width: 0; }
+.account-allocation-heading { display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap; gap: var(--s-1) var(--s-3); min-width: 0; font-size: 12px; line-height: 1.7; }
+.account-allocation-heading > :first-child { min-width: 0; overflow-wrap: anywhere; }
+.account-allocation-heading strong { font-family: var(--font-mono); font-size: 11px; font-weight: 400; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.account-allocation-meta { display: block; margin: var(--s-1) 0 0; font-family: var(--font-mono); color: var(--fg-dim); font-size: 9px; line-height: 1.8; overflow-wrap: anywhere; }
+.account-allocation-track { position: relative; height: 8px; margin-top: var(--s-2); background: var(--hairline); overflow: hidden; }
+.account-allocation-zero { position: absolute; inset-block: 0; left: 50%; width: 1px; background: var(--fg-dim); opacity: .65; z-index: 1; }
+.account-allocation-bar { position: absolute; inset-block: 0; max-width: 50%; background: var(--accent); }
+.account-history-change { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--s-4); margin: 0 0 var(--s-4); }
+.account-history-stat { min-width: 0; }
+.account-history-stat dd { margin: var(--s-1) 0 0; font-family: var(--font-mono); font-size: 15px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.account-history-chart { min-width: 0; margin-bottom: var(--s-4); }
+.account-history-chart .no-results { margin-block: var(--s-5); }
+@media (min-width: 640px) {
+  .account-page-controls { width: auto; }
+  .account-chart-control { max-width: 320px; }
+  .account-total-details { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+@media (min-width: 960px) {
+  .account-page-heading > .account-page-controls { flex-shrink: 0; margin-left: auto; }
+  .account-total-card { grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); gap: var(--s-6); }
+  .account-total-details { grid-template-columns: repeat(2, minmax(0, 1fr)); border-top: 0; border-left: 1px solid var(--border); padding-top: 0; padding-left: var(--s-6); }
+  .account-insights-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (min-width: 1280px) {
+  .account-summary { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+}
+@media (max-width: 359px) {
+  .account-total-details, .account-history-change { grid-template-columns: minmax(0, 1fr); }
+  .account-page-controls > .page-chart-scale { width: 100%; }
+}
