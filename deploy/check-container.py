@@ -20,7 +20,7 @@ LEDGER_TABLES = {
     "ingest_batches", "ingest_rows", "transaction_edits", "settings",
     "transaction_relations",
     "external_endpoint_refs", "transaction_account_memberships",
-    "transaction_category_decisions", "account_profiles",
+    "transaction_category_decisions", "account_profiles", "account_ownership",
 }
 
 
@@ -123,7 +123,7 @@ def check_exports(base, cookie, container, account_id, transaction_id, decisions
     check_export_headers(headers, "json")
     archive = json.loads(body)
     assert archive.get("format") == "saga-fe-ledger" and archive.get("formatVersion") == 1, "JSON archive is not versioned"
-    assert archive.get("databaseSchemaVersion") == 5 and archive.get("amountUnit") == "ore", "JSON archive schema or amount unit is incorrect"
+    assert archive.get("databaseSchemaVersion") == 6 and archive.get("amountUnit") == "ore", "JSON archive schema or amount unit is incorrect"
     tables = archive.get("tables", {})
     assert set(tables) == LEDGER_TABLES and all(tables.values()), "JSON archive omitted saved ledger tables or rows"
     assert tables["accounts"][0]["id"] == account_id, "account identity was lost in export"
@@ -143,6 +143,7 @@ def check_exports(base, cookie, container, account_id, transaction_id, decisions
         return row["transaction_id"], row["side"], row["endpoint_id"]
     assert sorted(tables["transaction_account_memberships"], key=membership_key) == sorted(expected_memberships, key=membership_key), "account membership decisions were omitted from export"
     assert {row["id"] for row in tables["external_endpoint_refs"]} == {decision["endpointId"] for decision in memberships}, "reviewed external references were omitted from export"
+    assert len(tables["account_ownership"]) == 1 and tables["account_ownership"][0]["account_id"] == account_id, "ownership link was omitted from export"
     categories = tables["transaction_category_decisions"]
     assert len(categories) == 1 and categories[0]["category"] == "Synthetic selected category" and categories[0]["status"] == "user_applied", "category decisions were omitted from export"
     check_exports_clean(container)
@@ -269,6 +270,31 @@ def check_memberships(base, cookie, transaction_id, related_id):
     assert all(after[table] == values for table, values in before.items() if table not in {"external_endpoint_refs", "transaction_account_memberships"}), "account review changed bookkeeping or pair decisions"
     assert private_json(base, "/api/transactions/" + urllib.parse.quote(related_id, safe=""), cookie)["transaction"]["toMembership"]["status"] == "suggested", "account confirmation leaked to another payment"
     return final
+
+
+def check_ownership(base, cookie, transaction_id, account_id):
+    path = "/api/account-ownership"
+    detail_path = "/api/transactions/" + transaction_id
+    original = private_json(base, detail_path, cookie)
+    decision = {"endpointId": original["sourceTo"]["id"], "accountId": account_id}
+    assert request(base, path, "PATCH", decision)[0] == 401, "account ownership did not require owner login"
+    assert request(base, path, "PATCH", decision, cookie, origin="https://untrusted.example")[0] == 403, "cross-origin ownership mutation was accepted"
+    before = private_json(base, "/api/export?format=json", cookie)["tables"]
+    for invalid in ({**decision, "accountId": "missing-fixture"}, {**decision, "endpointId": account_id}, {**decision, "unexpected": True}):
+        assert set(private_json(base, path, cookie, 400, "PATCH", invalid)) == {"error"}, "invalid ownership decision was accepted"
+    assert private_json(base, "/api/export?format=json", cookie)["tables"] == before, "invalid ownership decisions changed saved state"
+    saved = private_json(base, path, cookie, method="PATCH", payload=decision)
+    assert saved == decision, "ownership link save failed"
+    assert private_json(base, path, cookie, method="PATCH", payload=decision) == saved, "ownership retry changed its account"
+    detail = private_json(base, detail_path, cookie)
+    assert detail["to"]["owned"] and detail["to"]["accountId"] == account_id, "account ownership was not projected"
+    assert detail["transaction"]["toMembership"]["provenance"] == "owner-account-ownership", "owner declaration was reported as an imported fact"
+    assert detail["transaction"]["kind"] == original["transaction"]["kind"], "ownership overrode explicit classification"
+    assert private_json(base, "/api/endpoints/" + decision["endpointId"], cookie)["endpoint"]["id"] == account_id, "old endpoint URL did not resolve to owned account"
+    private_json(base, path, cookie, method="PATCH", payload={**decision, "accountId": None})
+    assert private_json(base, "/api/export?format=json", cookie)["tables"] == before, "ownership undo changed existing ledger state"
+    private_json(base, path, cookie, method="PATCH", payload=decision)
+    return decision
 
 
 def check_activity(base, cookie):
@@ -431,6 +457,7 @@ def main():
             decisions = check_relations(base, cookie, transaction_id, related_id)
             memberships = check_memberships(base, cookie, transaction_id, related_id)
             check_categories(base, cookie, related_id)
+            ownership = check_ownership(base, cookie, transaction_id, account["id"])
             docker("restart", "--time", "2", container)
             base = wait_healthy(container)
             status, body, _ = request(base, "/api/accounts", cookie=cookie)
@@ -440,12 +467,14 @@ def main():
             assert private_json(base, "/api/relations", cookie)["decisions"] == decisions, "saved relationship decisions did not persist after restart"
             assert private_json(base, "/api/account-memberships", cookie)["decisions"] == memberships, "account membership decisions did not persist after restart"
             assert private_json(base, "/api/transactions/" + related_id, cookie)["transaction"]["category"] == "Synthetic selected category", "category decision did not persist after restart"
+            owned = private_json(base, "/api/transactions/" + transaction_id, cookie)
+            assert owned["to"]["accountId"] == ownership["accountId"], "ownership did not persist after restart"
             check_exports(base, cookie, container, account["id"], transaction_id, decisions, memberships)
             docker("exec", container, "node", "scripts/backup.mjs", "/tmp/fixture-backup.sqlite")
-            verify = "import {DatabaseSync} from 'node:sqlite';const db=new DatabaseSync('/tmp/fixture-backup.sqlite',{readOnly:true});if(db.prepare('PRAGMA integrity_check').get().integrity_check!=='ok'||db.prepare('PRAGMA foreign_key_check').all().length||db.prepare('PRAGMA user_version').get().user_version!==5||db.prepare('SELECT count(*) AS n FROM transactions').get().n!==2||db.prepare('SELECT count(*) AS n FROM transaction_relations WHERE status=?').get('confirmed').n!==1||db.prepare('SELECT count(*) AS n FROM transaction_account_memberships').get().n!==2||db.prepare('SELECT count(*) AS n FROM external_endpoint_refs').get().n!==2||db.prepare('SELECT count(*) AS n FROM transaction_category_decisions WHERE status=?').get('user_applied').n!==1)process.exit(1);db.close();"
+            verify = "import {DatabaseSync} from 'node:sqlite';const db=new DatabaseSync('/tmp/fixture-backup.sqlite',{readOnly:true});if(db.prepare('PRAGMA integrity_check').get().integrity_check!=='ok'||db.prepare('PRAGMA foreign_key_check').all().length||db.prepare('PRAGMA user_version').get().user_version!==6||db.prepare('SELECT count(*) AS n FROM transactions').get().n!==2||db.prepare('SELECT count(*) AS n FROM transaction_relations WHERE status=?').get('confirmed').n!==1||db.prepare('SELECT count(*) AS n FROM transaction_account_memberships').get().n!==2||db.prepare('SELECT count(*) AS n FROM external_endpoint_refs').get().n!==2||db.prepare('SELECT count(*) AS n FROM account_ownership').get().n!==1||db.prepare('SELECT count(*) AS n FROM transaction_category_decisions WHERE status=?').get('user_applied').n!==1)process.exit(1);db.close();"
             docker("exec", container, "node", "--input-type=module", "-e", verify)
             check_activity(base, cookie)
-        print("Restricted runtime, owner login, ingestion, persistence, schema5 exports/recovery, category decisions, account evidence/confirmation/category totals and detail APIs passed with synthetic data.")
+        print("Restricted runtime, owner login, ingestion, persistence, schema6 exports/recovery and account ownership, category decisions, account evidence/confirmation/category totals and detail APIs passed with synthetic data.")
     except Exception:
         # These isolated containers contain only the synthetic fixtures above.
         for container in containers:
