@@ -5,6 +5,7 @@ import { test } from 'node:test';
 import { normalizeMotion, resolveMotion, reducedMotion } from '../src/scripts/motion.js';
 import { CHART_SCALES, DEFAULT_CHART_SCALE, normalizeDefaultChartScale, chartScaleLabel } from '../src/scripts/page-chart-scale.js';
 import { DEFAULT_THEME, DEFAULT_MODE, THEMES, normalizeTheme, normalizeMode, resolveMode, initializeThemes } from '../src/scripts/themes.js';
+import { CHART_VIEWS, ASCII_CELL_SIZES, DEFAULT_CHART_VIEW, DEFAULT_ASCII_CELL_SIZE, normalizeChartView, normalizeAsciiCellSize } from '../src/scripts/chart-view-settings.js';
 
 const styles = new URL('../src/styles/', import.meta.url);
 const themeDirectory = new URL('themes/', styles);
@@ -144,9 +145,9 @@ test('motion preferences follow the OS by default and explicit choices override 
 });
 
 
-function appearanceHarness() {
-  const controls = new Map(), saved = new Map(), events = {};
-  const root = { dataset: { theme: DEFAULT_THEME, mode: 'dark', motionPreference: 'system' } };
+function appearanceHarness({ dataset = {}, storageThrows = false } = {}) {
+  const controls = new Map(), saved = new Map(), events = {}, dispatched = [];
+  const root = { dataset: { theme: DEFAULT_THEME, mode: 'dark', motionPreference: 'system', ...dataset } };
   const defaultOption = { textContent: '' };
   const element = id => {
     if (!controls.has(id)) controls.set(id, { value: '', addEventListener(name, callback) { this[name] = callback; } });
@@ -156,12 +157,13 @@ function appearanceHarness() {
   const colorMedia = { matches: true, addEventListener() {} };
   vm.runInNewContext(`(${initializeThemes.toString()})()`, {
     document: { documentElement: root, getElementById: element, querySelectorAll: () => [defaultOption], addEventListener() {} },
-    window: { matchMedia: query => query.includes('reduced-motion') ? media : colorMedia, dispatchEvent() {}, addEventListener: (name, callback) => { events[name] = callback; } },
-    localStorage: { setItem: (key, value) => saved.set(key, value) },
-    requestAnimationFrame() {}, CustomEvent: class {},
+    window: { matchMedia: query => query.includes('reduced-motion') ? media : colorMedia, dispatchEvent(event) { dispatched.push({ type: event.type, chartView: root.dataset.chartView, asciiCellSize: root.dataset.asciiCellSize }); }, addEventListener: (name, callback) => { events[name] = callback; } },
+    localStorage: { setItem(key, value) { if (storageThrows) throw new Error('Storage unavailable'); saved.set(key, value); } },
+    requestAnimationFrame() {}, CustomEvent: class { constructor(type) { this.type = type; } },
     THEMES, DEFAULT_THEME, DEFAULT_MODE, DEFAULT_CHART_SCALE, normalizeTheme, normalizeMode, resolveMode, normalizeMotion, resolveMotion, normalizeDefaultChartScale, chartScaleLabel,
+    DEFAULT_CHART_VIEW, DEFAULT_ASCII_CELL_SIZE, normalizeChartView, normalizeAsciiCellSize,
   });
-  return { root, element, saved, events, media, defaultOption };
+  return { root, element, saved, events, media, defaultOption, dispatched };
 }
 
 test('motion controls save choices, follow live OS changes only in system mode, and sync across tabs', () => {
@@ -211,4 +213,101 @@ test('Appearance saves the default scale, updates Default labels, and syncs acro
   assert.equal(control.value, 'sqrt');
   events.storage({ key: null });
   assert.equal(control.value, 'sqrt');
+});
+
+test('chart appearance defaults to ASCII with 7 px characters and validates saved values before paint', () => {
+  assert.equal(DEFAULT_CHART_VIEW, 'ascii');
+  assert.equal(DEFAULT_ASCII_CELL_SIZE, 7);
+  for (const view of CHART_VIEWS) {
+    assert.equal(normalizeChartView(view.id), view.id);
+    assert.equal(beforePaint({ 'saga-fe-chart-view': view.id }).chartView, view.id);
+  }
+  for (const size of ASCII_CELL_SIZES) {
+    assert.equal(normalizeAsciiCellSize(size), size);
+    assert.equal(normalizeAsciiCellSize(String(size)), size);
+    assert.equal(beforePaint({ 'saga-fe-ascii-cell-size': String(size) }).asciiCellSize, String(size));
+  }
+  for (const invalid of [null, undefined, '', 'unexpected', '5px', '5.0', 6, 0, -3]) {
+    assert.equal(normalizeAsciiCellSize(invalid), 7);
+    assert.equal(beforePaint({ 'saga-fe-ascii-cell-size': invalid }).asciiCellSize, '7');
+  }
+  assert.equal(normalizeChartView('unexpected'), 'ascii');
+  const fallback = beforePaint({ 'saga-fe-chart-view': 'unexpected' });
+  assert.equal(fallback.chartView, 'ascii');
+  assert.equal(fallback.asciiCellSize, '7');
+  const blocked = beforePaint({ 'saga-fe-chart-view': 'normal', 'saga-fe-ascii-cell-size': '10' }, false, true);
+  assert.equal(blocked.chartView, 'ascii');
+  assert.equal(blocked.asciiCellSize, '7');
+});
+
+test('Appearance saves chart view and size, restores them on reload, and retains size in Normal view', () => {
+  const { root, element, saved, dispatched } = appearanceHarness();
+  const view = element('chart-view-select'), size = element('ascii-cell-size-select');
+  const sizeControl = element('ascii-cell-size-control');
+  assert.equal(view.value, 'ascii');
+  assert.equal(size.value, '7');
+  assert.equal(sizeControl.hidden, false);
+  assert.equal(size.disabled, false);
+  size.value = '10'; size.change();
+  assert.equal(saved.get('saga-fe-ascii-cell-size'), '10');
+  assert.equal(root.dataset.asciiCellSize, '10');
+  view.value = 'normal'; view.change();
+  assert.equal(saved.get('saga-fe-chart-view'), 'normal');
+  assert.equal(root.dataset.chartView, 'normal');
+  assert.equal(sizeControl.hidden, true);
+  assert.equal(size.disabled, true);
+  assert.equal(size.value, '10');
+
+  const reload = appearanceHarness({ dataset: beforePaint(Object.fromEntries(saved)) });
+  assert.equal(reload.element('chart-view-select').value, 'normal');
+  assert.equal(reload.element('ascii-cell-size-select').value, '10');
+  assert.equal(reload.element('ascii-cell-size-control').hidden, true);
+  reload.element('chart-view-select').value = 'ascii';
+  reload.element('chart-view-select').change();
+  assert.equal(reload.root.dataset.asciiCellSize, '10');
+  assert.equal(reload.element('ascii-cell-size-select').disabled, false);
+  assert.deepEqual(dispatched.filter(event => event.type === 'saga:chartviewchange'), [
+    { type: 'saga:chartviewchange', chartView: 'ascii', asciiCellSize: '7' },
+    { type: 'saga:chartviewchange', chartView: 'ascii', asciiCellSize: '10' },
+    { type: 'saga:chartviewchange', chartView: 'normal', asciiCellSize: '10' },
+  ]);
+});
+
+test('chart appearance syncs storage changes, key removal and clear across tabs', () => {
+  const { root, element, events, saved, dispatched } = appearanceHarness();
+  const view = element('chart-view-select'), size = element('ascii-cell-size-select');
+  events.storage({ key: 'saga-fe-chart-view', newValue: 'normal' });
+  assert.equal(view.value, 'normal');
+  assert.equal(element('ascii-cell-size-control').hidden, true);
+  events.storage({ key: 'saga-fe-ascii-cell-size', newValue: '3' });
+  assert.equal(size.value, '3');
+  assert.equal(root.dataset.asciiCellSize, '3');
+  events.storage({ key: 'saga-fe-chart-view', newValue: null });
+  assert.equal(view.value, 'ascii');
+  assert.equal(size.disabled, false);
+  assert.equal(size.value, '3');
+  events.storage({ key: 'saga-fe-ascii-cell-size', newValue: null });
+  assert.equal(size.value, '7');
+  events.storage({ key: 'saga-fe-chart-view', newValue: 'unsupported' });
+  events.storage({ key: 'saga-fe-ascii-cell-size', newValue: '9' });
+  assert.equal(view.value, 'ascii');
+  assert.equal(size.value, '7');
+  events.storage({ key: 'saga-fe-chart-view', newValue: 'normal' });
+  events.storage({ key: 'saga-fe-ascii-cell-size', newValue: '5' });
+  events.storage({ key: null });
+  assert.equal(view.value, 'ascii');
+  assert.equal(size.value, '7');
+  assert.equal(root.dataset.chartView, 'ascii');
+  assert.equal(root.dataset.asciiCellSize, '7');
+  assert.equal(size.disabled, false);
+  assert.equal(saved.size, 0, 'Storage events must not write preferences back to another tab');
+  assert.deepEqual(dispatched.at(-1), { type: 'saga:chartviewchange', chartView: 'ascii', asciiCellSize: '7' });
+});
+
+test('chart appearance choices remain usable when browser storage is unavailable', () => {
+  const { root, element } = appearanceHarness({ storageThrows: true });
+  element('chart-view-select').value = 'normal'; element('chart-view-select').change();
+  element('ascii-cell-size-select').value = '5'; element('ascii-cell-size-select').change();
+  assert.equal(root.dataset.chartView, 'normal');
+  assert.equal(root.dataset.asciiCellSize, '5');
 });

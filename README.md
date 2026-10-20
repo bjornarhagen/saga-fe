@@ -163,6 +163,14 @@ can use them.
 
 ## Dashboard and appearance
 
+The standalone [ASCII workshop](http://127.0.0.1:5187/ascii-lab) compares the
+current statistics with an ASCII backdrop and directly plotted characters.
+Use the address printed by `scripts/preview.sh up` when working in a preview.
+Each version also has its own `/ascii-lab/original`, `/ascii-lab/backdrop`, or
+`/ascii-lab/glyphs` page. All specimens use the same invented data, without
+reading the ledger. Palette, mode, character size, line direction, and the
+source-chart mix can be changed without saving dashboard preferences.
+
 - **Overview:** period totals, monthly cash flow, spending categories, and major
   payments. Select a category or payment to inspect its transactions.
 - **Look ahead:** adjustable forecasts from 1 to 60 months, with up to 24 months of
@@ -185,6 +193,13 @@ Saga charcoal, ivory, amber, and crimson palette; **Girlypop** uses blush, plum,
 pink, and gold; **Matrix** uses a phosphor-green terminal palette. Every theme
 supports **Light**, **Dark**, and **System** mode. Appearance stays per browser.
 Charts and components use shared semantic tokens, and fonts are self-hosted.
+
+In **Appearance → Chart view**, choose **ASCII** or **Normal**. ASCII is the
+default and plots lines with rotated characters, with character bars for
+categories and account allocations. **ASCII character size** ranges from
+extra fine (3 px) to coarse (10 px). These choices stay in your browser and
+apply to charts, sparklines, and expanded views. Exact figures and chart
+interaction work in both views.
 
 Payment and account details have reloadable links with opaque ledger IDs.
 Account activity covers all saved dates, independently of the Overview period.

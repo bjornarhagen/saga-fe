@@ -4,10 +4,11 @@ import '../styles/theme.css';
 import '../styles/dashboard.css';
 import { CHART_SCALES, DEFAULT_CHART_SCALE } from '../scripts/page-chart-scale.js';
 import { THEMES } from '../scripts/themes.js';
+import { CHART_VIEWS, ASCII_CELL_SIZES, DEFAULT_CHART_VIEW, DEFAULT_ASCII_CELL_SIZE } from '../scripts/chart-view-settings.js';
 const canSignOut = Astro.cookies.has('saga_fe_session');
 ---
 <!doctype html>
-<html lang="en" data-theme="bjornarhagen" data-mode="dark" data-mode-preference="dark" data-motion-preference="system" data-chart-scale-default={DEFAULT_CHART_SCALE} data-chart-scale-options={CHART_SCALES.map(scale => scale.id).join(',')} data-theme-options={THEMES.map(theme => theme.id).join(',')}>
+<html lang="en" data-theme="bjornarhagen" data-mode="dark" data-mode-preference="dark" data-motion-preference="system" data-chart-scale-default={DEFAULT_CHART_SCALE} data-chart-scale-options={CHART_SCALES.map(scale => scale.id).join(',')} data-chart-view={DEFAULT_CHART_VIEW} data-chart-view-options={CHART_VIEWS.map(view => view.id).join(',')} data-ascii-cell-size={DEFAULT_ASCII_CELL_SIZE} data-ascii-cell-size-options={ASCII_CELL_SIZES.join(',')} data-theme-options={THEMES.map(theme => theme.id).join(',')}>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
@@ -50,6 +51,18 @@ const canSignOut = Astro.cookies.has('saga_fe_session');
                 <option value="reduce">Reduced motion</option>
               </select>
               <p id="motion-description" class="appearance-description">Follow system uses your device’s motion preference. Reduced motion shows numbers immediately and turns off transitions.</p>
+              <label for="chart-view-select">Chart view</label>
+              <select id="chart-view-select" aria-describedby="chart-view-description">
+                {CHART_VIEWS.map(view => <option value={view.id} selected={view.id === DEFAULT_CHART_VIEW}>{view.label}</option>)}
+              </select>
+              <p id="chart-view-description" class="appearance-description">ASCII draws charts with characters. Exact figures and chart controls work in both views.</p>
+              <div id="ascii-cell-size-control">
+                <label for="ascii-cell-size-select">ASCII character size</label>
+                <select id="ascii-cell-size-select" aria-describedby="ascii-cell-size-description">
+                  {ASCII_CELL_SIZES.map(size => <option value={size} selected={size === DEFAULT_ASCII_CELL_SIZE}>{size} px</option>)}
+                </select>
+                <p id="ascii-cell-size-description" class="appearance-description">Smaller characters show more detail. Preferences stay in this browser.</p>
+              </div>
               <label for="default-chart-scale-select">Default chart scale</label>
               <select id="default-chart-scale-select" aria-describedby="default-chart-scale-description">
                 {CHART_SCALES.map(scale => <option value={scale.id} selected={scale.id === DEFAULT_CHART_SCALE}>{scale.label}</option>)}

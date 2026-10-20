@@ -1,0 +1,60 @@
+---
+import { timeSeriesChart, sparkline } from '../../scripts/charts.js';
+import { labHistory, labCash, labTotals, labCategories, labPayments, labMoney, labCharts } from '../../lib/ascii-lab.js';
+const { method, compact = false } = Astro.props;
+const metrics = [
+  { label: 'Money in', value: labTotals.income, values: labHistory.map(point => point.income), note: 'Regular income · Jan–Jun', color: 'var(--chart-1)' },
+  { label: 'Spending', value: labTotals.spending, values: labHistory.map(point => point.spending), note: 'Includes historical one-offs', color: 'var(--chart-3)' },
+];
+---
+<section class:list={['lab-suite', { 'lab-suite-compact': compact }]} data-lab-method={method.id} id={method.id} aria-labelledby={`${method.id}-title`}>
+  <header class="lab-method-heading">
+    <p class="eyebrow">[{method.number}] {method.tag}</p>
+    <h2 id={`${method.id}-title`}>{method.name}</h2>
+    <p>{method.description}</p>
+    {compact && <a class="lab-method-link" href={`/ascii-lab/${method.id}`}>Open this version <span aria-hidden="true">↗</span></a>}
+  </header>
+  <div class="lab-specimens">
+    <article class="lab-specimen lab-metric-specimen" aria-labelledby={`${method.id}-metrics`}>
+      <h3 class="lab-section-label" id={`${method.id}-metrics`}>00 / TOTALS + SPARKLINES</h3>
+      <div class="lab-metrics">
+        {metrics.map(metric => <div class="metric"><div class="metric-label">{metric.label}</div><p class="metric-value">{labMoney(metric.value)}</p><div set:html={sparkline(metric.values, metric.color, { title: metric.label, points: labHistory, scale: 'linear' })} /><p class="metric-note">{metric.note}</p></div>)}
+      </div>
+      <dl class="lab-mini-stats">
+        <div><dt>Cash change</dt><dd>{labMoney(labTotals.change)}</dd></div>
+        <div><dt>To savings</dt><dd>{labMoney(labTotals.saving)}</dd></div>
+      </dl>
+    </article>
+    {labCharts.map(chart => <article class="card lab-specimen" aria-labelledby={`${method.id}-${chart.id}`}>
+      <div class="card-heading"><div><p class="eyebrow">{chart.eyebrow}</p><h3 id={`${method.id}-${chart.id}`}>{chart.title}</h3></div></div>
+      <div set:html={timeSeriesChart(chart.options)} />
+      <p class="chart-note">{chart.note}</p>
+    </article>)}
+    <article class="card lab-specimen" aria-labelledby={`${method.id}-ranking`}>
+      <div class="card-heading"><div><p class="eyebrow">05 / DISTRIBUTION + RANKING</p><h3 id={`${method.id}-ranking`}>Where it goes</h3></div></div>
+      {labCategories.map((category, i) => <button type="button" class="category-row" data-lab-category={i} aria-haspopup="dialog">
+        <span class="category-top"><span class="category-name"><i class="category-dot" style={`background:${category.color}`} />{category.name}</span><span class="category-amount">{labMoney(category.amount)}<span class="category-share">{Math.round(category.amount / labTotals.spending * 100)}%</span></span></span>
+        <span class="bar-track" aria-hidden="true"><span class="bar-fill" style={`display:block;width:${category.amount / labCategories[0].amount * 100}%;background:${category.color}`} /></span>
+        <code class="lab-character-bar" aria-hidden="true" style={`color:${category.color}`}>{'[' + '#'.repeat(Math.round(category.amount / labCategories[0].amount * 24)).padEnd(24, '.') + ']'}</code>
+      </button>)}
+      <div class="lab-payments">
+        {labPayments.map((payment, i) => <div class="merchant-row"><span class="merchant-icon" aria-hidden="true">{String(i + 1).padStart(2, '0')}</span><span class="merchant-name">{payment.name}<small>{payment.note}</small></span><span class="merchant-amount">{labMoney(payment.amount)}</span></div>)}
+      </div>
+      <p class="chart-note">Select a category to test clicks through the treatment.</p>
+    </article>
+    <article class="card lab-specimen" aria-labelledby={`${method.id}-details`}>
+      <div class="card-heading"><div><p class="eyebrow">06 / SMALL STATISTICS + PROGRESS</p><h3 id={`${method.id}-details`}>The quieter components</h3></div></div>
+      <dl class="statistics-grid lab-detail-statistics">
+        <div class="stat-item"><dt>Monthly spending</dt><dd class="stat-value">{labMoney(Math.round(labTotals.spending / 6))}</dd><dd class="stat-note">Mean of the six complete sample months.</dd></div>
+        <div class="stat-item"><dt>Savings contribution rate</dt><dd class="stat-value">{(labTotals.saving / labTotals.income * 100).toFixed(1)}%</dd><dd class="stat-note">Savings contributions ÷ incoming money.</dd></div>
+      </dl>
+      <div class="lab-pot"><div><span>Travel pot</span><strong>62%</strong></div><progress value="62" max="100" aria-label="Travel pot funded">62%</progress><code class="lab-character-bar" aria-hidden="true">[###############.........]</code><p class="input-note">6 200 kr of a 10 000 kr sample goal.</p></div>
+    </article>
+    <article class="card lab-specimen lab-edge-cases" aria-labelledby={`${method.id}-edge-cases`}>
+      <div class="card-heading"><div><p class="eyebrow">07 / EDGE CASES</p><h3 id={`${method.id}-edge-cases`}>Quiet months count too</h3></div></div>
+      <div set:html={sparkline(labCash.map(() => 0), 'var(--chart-label)', { title: 'Zero activity', points: labHistory })} />
+      <p class="input-note">A flat zero trend stays flat.</p>
+      <div set:html={timeSeriesChart({ ...labCharts[0].options, points: [], empty: 'No recorded activity in this sample.' })} />
+    </article>
+  </div>
+</section>

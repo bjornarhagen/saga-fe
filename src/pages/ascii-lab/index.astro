@@ -1,0 +1,6 @@
+---
+import AsciiLabLayout from '../../layouts/AsciiLabLayout.astro';
+import SpecimenSuite from '../../components/ascii-lab/SpecimenSuite.astro';
+import { LAB_METHODS } from '../../lib/ascii-lab.js';
+---
+<AsciiLabLayout>{LAB_METHODS.map(method => <SpecimenSuite method={method} compact />)}</AsciiLabLayout>

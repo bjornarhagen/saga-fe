@@ -20,11 +20,13 @@ import { periodStatistics, comparePeriods, ratio, activitySeries, automaticGroup
 import { renderStatistics, renderMetricCards, percentage, changeText } from './statistics.js';
 import { renderTimeSeriesChart } from './charts.js';
 import { initializeChartTooltips } from './chart-tooltips.js';
+import { initializeChartViews } from './chart-views.js';
 import { initializeBlockDialog, registerReadOnlyBlock } from './block-dialog.js';
 import { registerRanking } from './ranking-dialog.js';
 
 initializeChartTooltips();
 initializeBlockDialog();
+initializeChartViews();
 
 const $ = id => document.getElementById(id);
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
