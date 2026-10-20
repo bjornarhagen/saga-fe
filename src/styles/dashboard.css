@@ -142,6 +142,10 @@ main { padding-inline: var(--s-4); flex: 1; min-width: 0; }
 .category-share { color: var(--fg-dim); font-size: 9px; margin-left: var(--s-3); display: inline-block; width: 28px; text-align: right; }
 .bar-track { height: 3px; background: var(--hairline); overflow: hidden; }
 .bar-fill { height: 100%; }
+/* Character bars retain the original width and signed allocation position. */
+[data-ascii-bar] { height: calc(var(--ascii-cell-size, 7px) * 1.62); background: transparent !important; overflow: hidden; }
+.bar-track:has(> [data-ascii-bar]), .account-allocation-track:has(> [data-ascii-bar]) { height: calc(var(--ascii-cell-size, 7px) * 1.62); }
+.ascii-bar-glyphs { display: block; white-space: pre; font: calc(var(--ascii-cell-size, 7px) / .62)/1 var(--font-mono); pointer-events: none; user-select: none; }
 .merchant-row { display: flex; align-items: center; gap: var(--s-3); width: 100%; padding: var(--s-4) 0; border: 0; border-bottom: 1px solid var(--hairline); background: transparent; text-align: left; color: var(--fg-1); }
 .merchant-row:last-child { border-bottom: 0; }
 .merchant-row:hover { color: var(--link); }

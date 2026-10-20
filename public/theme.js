@@ -39,3 +39,20 @@ try {
   } catch { /* Keep square root when browser storage is unavailable. */ }
   root.dataset.chartScaleDefault = scale;
 }
+
+// Chart appearance is ready before the dashboard draws its first chart.
+{
+  const root = document.documentElement;
+  const views = (root.dataset.chartViewOptions || 'normal,ascii').split(',');
+  const sizes = (root.dataset.asciiCellSizeOptions || '3,5,7,10').split(',');
+  let view = views.includes(root.dataset.chartView) ? root.dataset.chartView : 'ascii';
+  let size = sizes.includes(root.dataset.asciiCellSize) ? root.dataset.asciiCellSize : '7';
+  try {
+    const savedView = localStorage.getItem('saga-fe-chart-view');
+    const savedSize = localStorage.getItem('saga-fe-ascii-cell-size');
+    if (views.includes(savedView)) view = savedView;
+    if (sizes.includes(savedSize)) size = savedSize;
+  } catch { /* Keep the default ASCII view when browser storage is unavailable. */ }
+  root.dataset.chartView = view;
+  root.dataset.asciiCellSize = size;
+}

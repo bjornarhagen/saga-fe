@@ -1,5 +1,6 @@
 import { DEFAULT_CHART_SCALE, normalizeDefaultChartScale, chartScaleLabel } from './page-chart-scale.js';
 import { normalizeMotion, resolveMotion } from './motion.js';
+import { DEFAULT_CHART_VIEW, DEFAULT_ASCII_CELL_SIZE, normalizeChartView, normalizeAsciiCellSize } from './chart-view-settings.js';
 
 // The theme registry is shared by the server-rendered controls and the client.
 // Theme additions need one manifest here, a CSS import, and a complete token set.
@@ -31,16 +32,31 @@ export function initializeThemes() {
   const modeSelect = document.getElementById('mode-select');
   const motionSelect = document.getElementById('motion-select');
   const chartScaleSelect = document.getElementById('default-chart-scale-select');
+  const chartViewSelect = document.getElementById('chart-view-select');
+  const asciiCellSizeSelect = document.getElementById('ascii-cell-size-select');
+  const asciiCellSizeControl = document.getElementById('ascii-cell-size-control');
   const description = document.getElementById('theme-description');
   const appearance = document.getElementById('appearance-control');
   const media = window.matchMedia('(prefers-color-scheme: dark)');
   const motionMedia = window.matchMedia('(prefers-reduced-motion: reduce)');
-  if (!select || !modeSelect || !motionSelect || !chartScaleSelect || !appearance) return;
+  if (!select || !modeSelect || !motionSelect || !chartScaleSelect || !chartViewSelect || !asciiCellSizeSelect || !asciiCellSizeControl || !appearance) return;
 
   let theme = normalizeTheme(root.dataset.theme);
   let preference = normalizeMode(root.dataset.modePreference || root.dataset.mode);
   let motion = normalizeMotion(root.dataset.motionPreference);
   let chartScale = normalizeDefaultChartScale(root.dataset.chartScaleDefault);
+  let chartView = normalizeChartView(root.dataset.chartView);
+  let asciiCellSize = normalizeAsciiCellSize(root.dataset.asciiCellSize);
+
+  function applyChartView() {
+    root.dataset.chartView = chartView;
+    root.dataset.asciiCellSize = String(asciiCellSize);
+    chartViewSelect.value = chartView;
+    asciiCellSizeSelect.value = String(asciiCellSize);
+    asciiCellSizeControl.hidden = chartView !== 'ascii';
+    asciiCellSizeSelect.disabled = chartView !== 'ascii';
+    window.dispatchEvent(new CustomEvent('saga:chartviewchange'));
+  }
 
   function applyChartScale() {
     root.dataset.chartScaleDefault = chartScale;
@@ -95,6 +111,16 @@ export function initializeThemes() {
     save('saga-fe-chart-scale', chartScale);
     applyChartScale();
   });
+  chartViewSelect.addEventListener('change', () => {
+    chartView = normalizeChartView(chartViewSelect.value);
+    save('saga-fe-chart-view', chartView);
+    applyChartView();
+  });
+  asciiCellSizeSelect.addEventListener('change', () => {
+    asciiCellSize = normalizeAsciiCellSize(asciiCellSizeSelect.value);
+    save('saga-fe-ascii-cell-size', String(asciiCellSize));
+    applyChartView();
+  });
   motionMedia.addEventListener('change', () => { if (motion === 'system') applyMotion(); });
   media.addEventListener('change', () => { if (preference === 'system') apply(); });
   window.addEventListener('storage', event => {
@@ -102,7 +128,9 @@ export function initializeThemes() {
     else if (event.key === 'saga-fe-mode') preference = normalizeMode(event.newValue);
     else if (event.key === 'saga-fe-motion') { motion = normalizeMotion(event.newValue); applyMotion(); return; }
     else if (event.key === 'saga-fe-chart-scale') { chartScale = normalizeDefaultChartScale(event.newValue); applyChartScale(); return; }
-    else if (event.key === null) { theme = DEFAULT_THEME; preference = DEFAULT_MODE; motion = 'system'; chartScale = DEFAULT_CHART_SCALE; applyMotion(); applyChartScale(); }
+    else if (event.key === 'saga-fe-chart-view') { chartView = normalizeChartView(event.newValue); applyChartView(); return; }
+    else if (event.key === 'saga-fe-ascii-cell-size') { asciiCellSize = normalizeAsciiCellSize(event.newValue); applyChartView(); return; }
+    else if (event.key === null) { theme = DEFAULT_THEME; preference = DEFAULT_MODE; motion = 'system'; chartScale = DEFAULT_CHART_SCALE; chartView = DEFAULT_CHART_VIEW; asciiCellSize = DEFAULT_ASCII_CELL_SIZE; applyMotion(); applyChartScale(); applyChartView(); }
     else return;
     apply();
   });
@@ -118,5 +146,6 @@ export function initializeThemes() {
   });
   applyMotion();
   applyChartScale();
+  applyChartView();
   apply();
 }

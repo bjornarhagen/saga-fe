@@ -1,0 +1,51 @@
+---
+import '../styles/fonts.css';
+import '../styles/theme.css';
+import '../styles/dashboard.css';
+import '../styles/ascii-lab.css';
+import { LAB_METHODS } from '../lib/ascii-lab.js';
+import { THEMES } from '../scripts/themes.js';
+const { method = null } = Astro.props;
+---
+<!doctype html>
+<html lang="en" data-theme="bjornarhagen" data-mode="dark" data-mode-preference="dark" data-theme-options={THEMES.map(theme => theme.id).join(',')}>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="color-scheme" content="dark light" />
+    <meta name="description" content="An ASCII statistics workshop for Saga Fé. Three treatments, the same invented data." />
+    <title>{method ? `${method.name} — ` : ''}ASCII workshop · Saga Fé</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <script is:inline src="/theme.js"></script>
+  </head>
+  <body class="ascii-lab">
+    <a class="skip-link" href="#main-content">Skip to specimens</a>
+    <div class="lab-shell">
+      <header class="lab-topbar"><a class="brand" href="/">Saga <span class="brand-name">Fé</span></a><span class="lab-location">~/ workshop / ascii</span><a class="lab-back" href="/">Back to ledger <span aria-hidden="true">↗</span></a></header>
+      <div class="lab-intro">
+        <div><p class="eyebrow">EXPERIMENT 001 <span aria-hidden="true">//</span> STATISTICS & CHARACTERS</p><h1>Statistics, in characters.</h1><p class="subtitle">Same numbers. Different texture. A workbench for finding how ASCII should feel in Saga Fé.</p></div>
+        <div class="lab-stamp"><span aria-hidden="true">[ + . : # ]</span><span>INVENTED DATA ONLY</span><small>JAN—JUN 2026 / NOK</small></div>
+      </div>
+      <nav class="lab-nav" aria-label="Experiment versions">
+        <a href="/ascii-lab" aria-current={!method ? 'page' : undefined}><span>[00]</span> Compare</a>
+        {LAB_METHODS.map(item => <a href={`/ascii-lab/${item.id}`} aria-current={method?.id === item.id ? 'page' : undefined}><span>[{item.number}]</span> {item.name}</a>)}
+      </nav>
+      <form class="lab-controls" aria-label="Preview controls">
+        <label>Palette<select id="lab-theme">{THEMES.map(theme => <option value={theme.id}>{theme.label}</option>)}</select></label>
+        <label>Mode<select id="lab-mode"><option value="dark">Dark</option><option value="light">Light</option></select></label>
+        <label>Character size<select id="lab-cell"><option value="3">Extra fine · 3 px</option><option value="5">Fine · 5 px</option><option value="7" selected>Medium · 7 px</option><option value="10">Coarse · 10 px</option></select></label>
+        <label>Line direction<select id="lab-line-mode"><option value="rotated" selected>Follow slope</option><option value="grid">Character grid</option></select></label>
+        <label class="lab-mix">Original under backdrop <output id="lab-mix-value" for="lab-mix">15%</output><input id="lab-mix" type="range" min="0" max="100" value="15" aria-describedby="lab-control-note" /></label>
+        <label class="lab-effects"><input id="lab-effects" type="checkbox" checked /> ASCII on</label>
+        <button type="reset" class="outline-button">Reset</button>
+      </form>
+      <p class="lab-control-note" id="lab-control-note">Hover or tap charts for exact values. Focus a chart and use ← / →. Open its figures to compare. Controls affect this workshop only.</p>
+      <noscript><p class="lab-control-note">Enable JavaScript to apply the ASCII experiments. All original charts and figures are shown below.</p></noscript>
+      <main id="main-content" tabindex="-1" class:list={['lab-workbench', { 'lab-compare': !method, 'lab-single': method }]}><slot /></main>
+      <p id="lab-render-status" class="lab-control-note" role="status"></p>
+      <footer class="lab-footer"><span><span class="local-dot"></span> SAGA FÉ / VISUAL WORKSHOP</span><span>3 METHODS · 1 SAMPLE · NO LEDGER CONNECTION</span></footer>
+    </div>
+    <dialog id="lab-category-dialog" aria-labelledby="lab-dialog-title"><div class="dialog-heading"><h2 id="lab-dialog-title">Sample category</h2><button class="icon-button" id="lab-dialog-close" aria-label="Close category details">×</button></div><p id="lab-dialog-copy"></p><p class="input-note">Click received by the component beneath the visual treatment. These are invented figures.</p></dialog>
+    <script src="../scripts/ascii-lab.js"></script>
+  </body>
+</html>
