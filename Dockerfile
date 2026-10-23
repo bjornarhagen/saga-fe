@@ -1,4 +1,8 @@
-FROM node:24-alpine AS dependencies
+FROM node:24.22.1-alpine@sha256:06d7adf3e0ef61a13f1d28682726366f97a15aa1888c934d3ecec86c33918b53 AS base
+# Refresh the OS trust store as well as Node's bundled roots.
+RUN apk add --no-cache --upgrade 'ca-certificates-bundle>=20261020-r0'
+
+FROM base AS dependencies
 ENV ASTRO_TELEMETRY_DISABLED=1
 WORKDIR /app
 COPY package.json package-lock.json ./
@@ -18,7 +22,7 @@ CMD ["npm", "run", "dev"]
 FROM development AS build
 RUN npm run build
 
-FROM node:24-alpine AS runtime
+FROM base AS runtime
 ENV NODE_ENV=production ASTRO_TELEMETRY_DISABLED=1 HOST=0.0.0.0 PORT=4321 DATABASE_PATH=/data/saga-fe.sqlite
 WORKDIR /app
 COPY --from=build --chown=node:node /app/dist ./dist

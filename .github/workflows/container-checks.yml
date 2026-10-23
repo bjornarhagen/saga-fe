@@ -26,13 +26,17 @@ jobs:
         with:
           persist-credentials: false
       - name: Build development toolchain
-        run: docker build --target development -t saga-fe:checks .
+        run: docker build --pull --target development -t saga-fe:checks .
+      - name: Verify development certificate trust
+        run: docker run --rm saga-fe:checks npm run check:tls
       - name: Check public source privacy
         run: docker run --rm -v "$PWD:/source:ro" -w /source saga-fe:checks node scripts/privacy-check.mjs
       - name: Test with synthetic data
         run: docker run --rm saga-fe:checks npm test
       - name: Build production image
-        run: docker build --target runtime -t saga-fe:ci .
+        run: docker build --pull --target runtime -t saga-fe:ci .
+      - name: Verify production certificate trust
+        run: docker run --rm saga-fe:ci npm run check:tls
       - name: Verify restricted runtime and authentication boundary
         run: python3 deploy/check-container.py saga-fe:ci
 
@@ -55,11 +59,13 @@ jobs:
           SOURCE_URL: https://github.com/${{ github.repository }}
           REVISION: ${{ github.sha }}
         run: |
-          docker build --target runtime -t saga-fe:publish \
+          docker build --pull --target runtime -t saga-fe:publish \
             --label "org.opencontainers.image.source=$SOURCE_URL" \
             --label "org.opencontainers.image.revision=$REVISION" .
       - name: Verify the image being published
-        run: python3 deploy/check-container.py saga-fe:publish
+        run: |
+          docker run --rm saga-fe:publish npm run check:tls
+          python3 deploy/check-container.py saga-fe:publish
       - name: Log in to GHCR
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
