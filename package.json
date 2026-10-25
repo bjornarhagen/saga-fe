@@ -9,6 +9,7 @@
     "preview": "astro preview --host 0.0.0.0 --port 4321",
     "test": "node --test test/*.test.js",
     "check:privacy": "node scripts/privacy-check.mjs",
+    "check:tls": "node scripts/check-tls-trust.mjs",
     "auth:setup": "node scripts/setup-auth.mjs",
     "backup": "node scripts/backup.mjs"
   },
